@@ -16,21 +16,25 @@ import {
   PlusCircle,
   Clock,
   Sparkles,
+  AlertCircle,
+  Loader2,
+  Plus,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { formatRelativeDate } from "@/lib/utils";
+import { formatRelativeDate, formatPhoneNumber } from "@/lib/utils";
+import { getEnvWhatsAppConfig } from "@/lib/config";
 
 export default function DashboardOverviewPage() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
-    totalContacts: 128,
-    activeConversations: 42,
-    messagesSent: 1845,
-    messagesReceived: 1420,
-    messagesDelivered: 1812,
-    messagesRead: 1690,
-    aiMessages: 1140,
-    campaignsCount: 6,
+    totalContacts: 0,
+    activeConversations: 0,
+    messagesSent: 0,
+    messagesReceived: 0,
+    messagesDelivered: 0,
+    messagesRead: 0,
+    aiMessages: 0,
+    campaignsCount: 0,
   });
   const [recentConversations, setRecentConversations] = useState<any[]>([]);
   const [waAccount, setWaAccount] = useState<any>(null);
@@ -43,19 +47,19 @@ export default function DashboardOverviewPage() {
       const { data: { user } } = await supabase.auth.getUser();
 
       if (user) {
-        // Fetch contacts count
+        // Fetch real contacts count
         const { count: contactsCount } = await supabase
           .from("contacts")
           .select("*", { count: "exact", head: true })
           .eq("user_id", user.id);
 
-        // Fetch conversations count
+        // Fetch real conversations count
         const { count: convCount } = await supabase
           .from("conversations")
           .select("*", { count: "exact", head: true })
           .eq("user_id", user.id);
 
-        // Fetch sent / received messages
+        // Fetch real messages counts
         const { count: sentCount } = await supabase
           .from("messages")
           .select("*", { count: "exact", head: true })
@@ -68,6 +72,20 @@ export default function DashboardOverviewPage() {
           .eq("user_id", user.id)
           .eq("direction", "inbound");
 
+        const { count: deliveredCount } = await supabase
+          .from("messages")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .eq("direction", "outbound")
+          .in("status", ["delivered", "read"]);
+
+        const { count: readCount } = await supabase
+          .from("messages")
+          .select("*", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .eq("direction", "outbound")
+          .eq("status", "read");
+
         const { count: aiCount } = await supabase
           .from("messages")
           .select("*", { count: "exact", head: true })
@@ -79,14 +97,26 @@ export default function DashboardOverviewPage() {
           .select("*", { count: "exact", head: true })
           .eq("user_id", user.id);
 
-        // WhatsApp account
+        // WhatsApp account in DB or environment
         const { data: account } = await supabase
           .from("whatsapp_accounts")
           .select("*")
           .eq("user_id", user.id)
           .maybeSingle();
 
-        setWaAccount(account);
+        const envConfig = getEnvWhatsAppConfig();
+        if (account) {
+          setWaAccount(account);
+        } else if (envConfig.phoneNumberId) {
+          setWaAccount({
+            status: "connected",
+            display_phone_number: `ID: ${envConfig.phoneNumberId}`,
+            verified_name: "Environment Configured",
+            quality_rating: "CONFIGURED",
+          });
+        } else {
+          setWaAccount(null);
+        }
 
         // AI settings
         const { data: aiSettings } = await supabase
@@ -107,25 +137,21 @@ export default function DashboardOverviewPage() {
           .order("last_message_at", { ascending: false })
           .limit(5);
 
-        if (contactsCount !== null && contactsCount !== undefined) {
-          setStats({
-            totalContacts: contactsCount || 0,
-            activeConversations: convCount || 0,
-            messagesSent: sentCount || 0,
-            messagesReceived: recvCount || 0,
-            messagesDelivered: Math.floor((sentCount || 0) * 0.98),
-            messagesRead: Math.floor((sentCount || 0) * 0.91),
-            aiMessages: aiCount || 0,
-            campaignsCount: campCount || 0,
-          });
-        }
+        setStats({
+          totalContacts: contactsCount || 0,
+          activeConversations: convCount || 0,
+          messagesSent: sentCount || 0,
+          messagesReceived: recvCount || 0,
+          messagesDelivered: deliveredCount || 0,
+          messagesRead: readCount || 0,
+          aiMessages: aiCount || 0,
+          campaignsCount: campCount || 0,
+        });
 
-        if (convs && convs.length > 0) {
-          setRecentConversations(convs);
-        }
+        setRecentConversations(convs || []);
       }
-    } catch {
-      // In offline / preview demo mode, graceful values remain visible
+    } catch (err) {
+      console.error("Dashboard data load error:", err);
     } finally {
       setLoading(false);
     }
@@ -134,6 +160,8 @@ export default function DashboardOverviewPage() {
   useEffect(() => {
     fetchDashboardData();
   }, []);
+
+  const isConnected = waAccount?.status === "connected";
 
   return (
     <div className="p-6 sm:p-8 space-y-8 max-w-7xl mx-auto">
@@ -144,16 +172,17 @@ export default function DashboardOverviewPage() {
             Dashboard Overview
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Real-time WhatsApp Cloud API metrics, Atharva AI activity, and campaign reach.
+            Real-time WhatsApp Business Cloud API metrics and Atharva AI activity.
           </p>
         </div>
 
         <div className="flex items-center space-x-3">
           <button
             onClick={fetchDashboardData}
-            className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 text-xs font-semibold flex items-center space-x-2 transition-colors"
+            disabled={loading}
+            className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300 text-xs font-semibold flex items-center space-x-2 transition-colors disabled:opacity-50"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
             <span>Refresh</span>
           </button>
 
@@ -162,7 +191,7 @@ export default function DashboardOverviewPage() {
             className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 flex items-center space-x-1.5 transition-all"
           >
             <MessageSquare className="w-3.5 h-3.5" />
-            <span>Open Inbox</span>
+            <span>Open WhatsApp Inbox</span>
           </Link>
         </div>
       </div>
@@ -172,18 +201,28 @@ export default function DashboardOverviewPage() {
         {/* WhatsApp Cloud Status */}
         <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/90 flex items-center justify-between">
           <div className="flex items-center space-x-4">
-            <div className="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center border border-emerald-500/20">
+            <div
+              className={`w-12 h-12 rounded-xl flex items-center justify-center border ${
+                isConnected
+                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                  : "bg-slate-800 text-slate-500 border-slate-700"
+              }`}
+            >
               <Radio className="w-6 h-6" />
             </div>
             <div>
               <div className="flex items-center space-x-2">
                 <p className="font-bold text-white text-sm">WhatsApp Business Cloud API</p>
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                {isConnected ? (
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                ) : (
+                  <span className="w-2 h-2 rounded-full bg-slate-500" />
+                )}
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                {waAccount?.display_phone_number
-                  ? `Active on ${waAccount.display_phone_number}`
-                  : "Meta Cloud API Connected & Ready"}
+                {isConnected
+                  ? waAccount?.display_phone_number || "Connected & Ready"
+                  : "WhatsApp is not connected."}
               </p>
             </div>
           </div>
@@ -191,7 +230,7 @@ export default function DashboardOverviewPage() {
             href="/connection"
             className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 flex items-center space-x-1"
           >
-            <span>Settings</span>
+            <span>{isConnected ? "Manage" : "Connect"}</span>
             <ArrowUpRight className="w-3.5 h-3.5" />
           </Link>
         </div>
@@ -205,12 +244,18 @@ export default function DashboardOverviewPage() {
             <div>
               <div className="flex items-center space-x-2">
                 <p className="font-bold text-white text-sm">Atharva AI Representative</p>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-500/15 text-teal-300 border border-teal-500/25">
-                  Autonomous
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    aiEnabled
+                      ? "bg-teal-500/15 text-teal-300 border border-teal-500/25"
+                      : "bg-slate-800 text-slate-400"
+                  }`}
+                >
+                  {aiEnabled ? "Autonomous ON" : "Disabled"}
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Active memory • Multilingual (Hinglish/Hindi/Marathi/English)
+                Dynamic OpenRouter free models • Conversation memory
               </p>
             </div>
           </div>
@@ -232,9 +277,10 @@ export default function DashboardOverviewPage() {
             <Users className="w-4 h-4 text-emerald-400" />
           </div>
           <p className="text-3xl font-extrabold text-white">{stats.totalContacts.toLocaleString()}</p>
-          <p className="text-xs text-emerald-400/90 flex items-center space-x-1 mt-2">
-            <TrendingUp className="w-3.5 h-3.5" />
-            <span>Active & Opted-in</span>
+          <p className="text-xs text-slate-400 mt-2">
+            {stats.totalContacts === 0
+              ? "No contacts yet. Start a new chat to add a contact."
+              : `${stats.activeConversations} active conversations`}
           </p>
         </div>
 
@@ -245,7 +291,9 @@ export default function DashboardOverviewPage() {
           </div>
           <p className="text-3xl font-extrabold text-white">{stats.messagesSent.toLocaleString()}</p>
           <p className="text-xs text-slate-400 mt-2">
-            Delivered: <span className="text-white font-medium">{stats.messagesDelivered}</span> (98.2%)
+            {stats.messagesSent === 0
+              ? "No messages sent yet."
+              : `Delivered: ${stats.messagesDelivered} • Read: ${stats.messagesRead}`}
           </p>
         </div>
 
@@ -263,146 +311,162 @@ export default function DashboardOverviewPage() {
 
         <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/90 hover:border-slate-700 transition-all">
           <div className="flex items-center justify-between text-slate-400 mb-3">
-            <span className="text-xs font-semibold uppercase tracking-wider">Delivery Quality</span>
+            <span className="text-xs font-semibold uppercase tracking-wider">Campaigns</span>
             <CheckCheck className="w-4 h-4 text-emerald-400" />
           </div>
-          <p className="text-3xl font-extrabold text-white">99.4%</p>
-          <p className="text-xs text-emerald-400 flex items-center space-x-1 mt-2">
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>Meta High Tier Rating</span>
+          <p className="text-3xl font-extrabold text-white">{stats.campaignsCount}</p>
+          <p className="text-xs text-slate-400 mt-2">
+            {stats.campaignsCount === 0 ? "No campaigns created yet." : "Broadcast campaigns launched"}
           </p>
         </div>
       </div>
 
-      {/* Visual Analytics & Recent Chats */}
+      {/* Activity Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Messages Volume Trends (SVG Chart) */}
+        {/* Messages Status Overview */}
         <div className="lg:col-span-2 p-6 rounded-2xl bg-slate-900/60 border border-slate-800/90 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
             <div>
-              <h2 className="text-base font-bold text-white">Message Activity Trends</h2>
-              <p className="text-xs text-slate-400 mt-0.5">Outbound vs Inbound WhatsApp message traffic</p>
+              <h2 className="text-base font-bold text-white">Message Activity</h2>
+              <p className="text-xs text-slate-400 mt-0.5">Real-time metrics from Supabase database</p>
             </div>
-            <div className="flex items-center space-x-4 text-xs">
-              <span className="flex items-center space-x-1.5 text-emerald-400">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                <span>Outbound</span>
-              </span>
-              <span className="flex items-center space-x-1.5 text-cyan-400">
-                <span className="w-2.5 h-2.5 rounded-full bg-cyan-500" />
-                <span>Inbound</span>
-              </span>
-            </div>
+            <Link href="/messages" className="text-xs font-semibold text-emerald-400 hover:text-emerald-300">
+              Go to Inbox
+            </Link>
           </div>
 
-          {/* SVG Sparkline Graph */}
-          <div className="h-56 w-full pt-4">
-            <svg viewBox="0 0 600 180" className="w-full h-full overflow-visible">
-              <defs>
-                <linearGradient id="emeraldGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10b981" stopOpacity="0.3" />
-                  <stop offset="100%" stopColor="#10b981" stopOpacity="0.0" />
-                </linearGradient>
-                <linearGradient id="cyanGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.3" />
-                  <stop offset="100%" stopColor="#06b6d4" stopOpacity="0.0" />
-                </linearGradient>
-              </defs>
-
-              {/* Grid lines */}
-              <line x1="0" y1="40" x2="600" y2="40" stroke="#1e293b" strokeDasharray="4 4" />
-              <line x1="0" y1="90" x2="600" y2="90" stroke="#1e293b" strokeDasharray="4 4" />
-              <line x1="0" y1="140" x2="600" y2="140" stroke="#1e293b" strokeDasharray="4 4" />
-
-              {/* Inbound Area & Line */}
-              <path
-                d="M 0 130 Q 100 120 200 80 T 400 65 T 600 45 L 600 170 L 0 170 Z"
-                fill="url(#cyanGrad)"
-              />
-              <path
-                d="M 0 130 Q 100 120 200 80 T 400 65 T 600 45"
-                fill="none"
-                stroke="#06b6d4"
-                strokeWidth="2.5"
-              />
-
-              {/* Outbound Area & Line */}
-              <path
-                d="M 0 110 Q 100 90 200 40 T 400 35 T 600 20 L 600 170 L 0 170 Z"
-                fill="url(#emeraldGrad)"
-              />
-              <path
-                d="M 0 110 Q 100 90 200 40 T 400 35 T 600 20"
-                fill="none"
-                stroke="#10b981"
-                strokeWidth="3"
-              />
-            </svg>
-
-            <div className="flex justify-between text-[11px] text-slate-500 pt-2 px-1">
-              <span>Mon</span>
-              <span>Tue</span>
-              <span>Wed</span>
-              <span>Thu</span>
-              <span>Fri</span>
-              <span>Sat</span>
-              <span>Sun</span>
+          {stats.messagesSent === 0 && stats.messagesReceived === 0 ? (
+            <div className="py-12 text-center space-y-3">
+              <MessageSquare className="w-10 h-10 text-slate-700 mx-auto" />
+              <p className="text-sm font-bold text-slate-300">No messages yet. Start your first conversation.</p>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                Once you connect WhatsApp and begin chatting, actual sent and incoming counts will display here.
+              </p>
+              <Link
+                href="/messages"
+                className="inline-flex items-center space-x-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition-all shadow"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Start Conversation</span>
+              </Link>
             </div>
-          </div>
+          ) : (
+            <div className="space-y-4 pt-2">
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-slate-300">Outbound Messages Dispatched</span>
+                  <span className="text-emerald-400 font-bold">{stats.messagesSent}</span>
+                </div>
+                <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800">
+                  <div className="bg-emerald-500 h-full w-full" />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-slate-300">Confirmed Delivered to Recipient</span>
+                  <span className="text-teal-400 font-bold">{stats.messagesDelivered}</span>
+                </div>
+                <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800">
+                  <div
+                    className="bg-teal-500 h-full"
+                    style={{
+                      width: `${stats.messagesSent > 0 ? (stats.messagesDelivered / stats.messagesSent) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-slate-300">Verified Read by Recipient</span>
+                  <span className="text-sky-400 font-bold">{stats.messagesRead}</span>
+                </div>
+                <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800">
+                  <div
+                    className="bg-sky-500 h-full"
+                    style={{
+                      width: `${stats.messagesSent > 0 ? (stats.messagesRead / stats.messagesSent) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-slate-300">Inbound Messages Received</span>
+                  <span className="text-cyan-400 font-bold">{stats.messagesReceived}</span>
+                </div>
+                <div className="w-full bg-slate-950 h-3 rounded-full overflow-hidden border border-slate-800">
+                  <div className="bg-cyan-500 h-full w-full" />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Recent Conversations */}
         <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800/90 flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-3">
               <h2 className="text-base font-bold text-white">Recent Conversations</h2>
               <Link href="/messages" className="text-xs text-emerald-400 hover:text-emerald-300 font-semibold">
                 View All
               </Link>
             </div>
 
-            <div className="space-y-3">
-              {(recentConversations.length > 0 ? recentConversations : [
-                { id: "1", contact: { name: "Rajesh Sharma", phone_number: "+919820112233" }, last_message_at: new Date().toISOString(), ai_status: "active" },
-                { id: "2", contact: { name: "Ananya Patel", phone_number: "+919876543210" }, last_message_at: new Date(Date.now() - 3600000).toISOString(), ai_status: "active" },
-                { id: "3", contact: { name: "Vikram Mehta", phone_number: "+919811223344" }, last_message_at: new Date(Date.now() - 7200000).toISOString(), ai_status: "paused_by_user" },
-              ]).map((conv, i) => (
-                <Link
-                  key={conv.id || i}
-                  href="/messages"
-                  className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 hover:border-slate-700 flex items-center justify-between transition-colors block"
-                >
-                  <div className="flex items-center space-x-3 min-w-0">
-                    <div className="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400 font-bold text-xs flex items-center justify-center flex-shrink-0">
-                      {conv.contact?.name ? conv.contact.name.charAt(0) : "C"}
+            {recentConversations.length === 0 ? (
+              <div className="py-8 text-center text-xs text-slate-500 space-y-2">
+                <Users className="w-8 h-8 text-slate-700 mx-auto" />
+                <p className="font-semibold text-slate-400">No active conversations</p>
+                <p className="text-[11px] text-slate-500">Chats will appear here once started.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {recentConversations.map((conv) => (
+                  <Link
+                    key={conv.id}
+                    href="/messages"
+                    className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 hover:border-slate-700 flex items-center justify-between transition-colors block"
+                  >
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400 font-bold text-xs flex items-center justify-center flex-shrink-0">
+                        {conv.contact?.name ? conv.contact.name.charAt(0).toUpperCase() : "C"}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold text-white truncate">
+                          {conv.contact?.name || formatPhoneNumber(conv.contact?.phone_number)}
+                        </p>
+                        <p className="text-[11px] text-slate-400 truncate">
+                          {formatPhoneNumber(conv.contact?.phone_number)}
+                        </p>
+                      </div>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-white truncate">{conv.contact?.name || "Customer"}</p>
-                      <p className="text-[11px] text-slate-400 truncate">{conv.contact?.phone_number}</p>
+                    <div className="text-right flex-shrink-0 ml-2">
+                      <span className="text-[10px] text-slate-500 block">
+                        {formatRelativeDate(conv.last_message_at)}
+                      </span>
+                      <span
+                        className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${
+                          conv.ai_status === "active" ? "bg-teal-500/10 text-teal-400" : "bg-amber-500/10 text-amber-400"
+                        }`}
+                      >
+                        {conv.ai_status === "active" ? "AI Rep" : "Human"}
+                      </span>
                     </div>
-                  </div>
-                  <div className="text-right flex-shrink-0 ml-2">
-                    <span className="text-[10px] text-slate-500 block">
-                      {formatRelativeDate(conv.last_message_at)}
-                    </span>
-                    <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${
-                      conv.ai_status === "active" ? "bg-teal-500/10 text-teal-400" : "bg-amber-500/10 text-amber-400"
-                    }`}>
-                      {conv.ai_status === "active" ? "AI Rep" : "Human"}
-                    </span>
-                  </div>
-                </Link>
-              ))}
-            </div>
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="mt-6 pt-4 border-t border-slate-800">
             <Link
-              href="/campaigns"
+              href="/messages"
               className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center justify-center space-x-2 transition-colors"
             >
               <PlusCircle className="w-3.5 h-3.5" />
-              <span>Launch New WhatsApp Campaign</span>
+              <span>Start New WhatsApp Chat</span>
             </Link>
           </div>
         </div>

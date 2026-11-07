@@ -32,11 +32,6 @@ export default function SignUpPage() {
       });
 
       if (authError) {
-        if (authError.message.includes("fetch failed") || authError.message.includes("placeholder")) {
-          localStorage.setItem("atharva_demo_user", JSON.stringify({ email, full_name: fullName, id: "demo-user-123" }));
-          router.push("/dashboard");
-          return;
-        }
         setError(authError.message);
         return;
       }
@@ -47,9 +42,9 @@ export default function SignUpPage() {
         // Confirmation email sent
         router.push("/login?message=Account created! Please sign in.");
       }
-    } catch {
-      localStorage.setItem("atharva_demo_user", JSON.stringify({ email, full_name: fullName, id: "demo-user-123" }));
-      router.push("/dashboard");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "An unexpected error occurred during signup.";
+      setError(message);
     } finally {
       setLoading(false);
     }

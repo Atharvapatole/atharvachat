@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { generateVerifyToken, maskSecret } from "@/lib/utils";
+import { getWebhookUrl, PRODUCTION_APP_URL } from "@/lib/config";
 
 export default function WhatsAppConnectionPage() {
   const [phoneNumberId, setPhoneNumberId] = useState("");
@@ -40,12 +41,9 @@ export default function WhatsAppConnectionPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  const [appUrl, setAppUrl] = useState("https://atharva-chat.vercel.app");
+  const webhookUrl = getWebhookUrl();
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      setAppUrl(window.location.origin);
-    }
 
     // Load existing account configuration
     const loadAccount = async () => {
@@ -80,8 +78,6 @@ export default function WhatsAppConnectionPage() {
 
     loadAccount();
   }, []);
-
-  const webhookUrl = `${appUrl}/api/webhooks/whatsapp`;
 
   const handleGenerateVerifyToken = () => {
     const newToken = generateVerifyToken();

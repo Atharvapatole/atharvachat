@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Search,
   Send,
@@ -10,19 +10,21 @@ import {
   CheckCheck,
   AlertCircle,
   FileCode,
-  Smile,
   Clock,
   Shield,
   Tag,
   Phone,
   Mail,
   Building,
-  RotateCcw,
   Sparkles,
   Loader2,
   Trash2,
   Play,
   Pause,
+  Plus,
+  MessageSquarePlus,
+  X,
+  Globe,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { formatMessageTime, formatPhoneNumber, formatRelativeDate } from "@/lib/utils";
@@ -42,6 +44,7 @@ interface Contact {
 interface Message {
   id: string;
   conversation_id: string;
+  whatsapp_message_id?: string | null;
   direction: "inbound" | "outbound";
   sender_type: "contact" | "human_user" | "ai_assistant" | "system_campaign";
   content: string;
@@ -64,6 +67,19 @@ interface Conversation {
   last_message?: Message;
 }
 
+const COUNTRY_CODES = [
+  { code: "+91", country: "India (IN)" },
+  { code: "+1", country: "USA / Canada (+1)" },
+  { code: "+44", country: "UK (+44)" },
+  { code: "+971", country: "UAE (+971)" },
+  { code: "+65", country: "Singapore (+65)" },
+  { code: "+61", country: "Australia (+61)" },
+  { code: "+49", country: "Germany (+49)" },
+  { code: "+33", country: "France (+33)" },
+  { code: "+966", country: "Saudi Arabia (+966)" },
+  { code: "+81", country: "Japan (+81)" },
+];
+
 export default function WhatsAppMessagingPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
@@ -71,205 +87,94 @@ export default function WhatsAppMessagingPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [inputText, setInputText] = useState("");
   const [sending, setSending] = useState(false);
+  const [loadingConversations, setLoadingConversations] = useState(true);
+  const [loadingMessages, setLoadingMessages] = useState(false);
+
+  // Modals & UI alerts
+  const [showNewChatModal, setShowNewChatModal] = useState(false);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [templates, setTemplates] = useState<any[]>([]);
   const [errorToast, setErrorToast] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<string | null>(null);
-  const [templates, setTemplates] = useState<any[]>([]);
-  const [showTemplateModal, setShowTemplateModal] = useState(false);
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [loadingMessages, setLoadingMessages] = useState(false);
   const [contactMemory, setContactMemory] = useState<any>(null);
 
+  // New Chat Form State
+  const [newChatCountry, setNewChatCountry] = useState("+91");
+  const [newChatPhone, setNewChatPhone] = useState("");
+  const [newChatName, setNewChatName] = useState("");
+  const [newChatInitialMessage, setNewChatInitialMessage] = useState("");
+  const [creatingChat, setCreatingChat] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const supabase = createClient();
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  // 1. Initial Load: Fetch conversations and templates
-  const loadConversations = async () => {
+  // 1. Fetch Conversations from Supabase (Strictly Real Data)
+  const fetchConversations = useCallback(async () => {
     try {
-      const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
-
-      if (user) {
-        const { data, error } = await supabase
-          .from("conversations")
-          .select("*, contact:contacts(*)")
-          .eq("user_id", user.id)
-          .order("last_message_at", { ascending: false });
-
-        if (data && data.length > 0) {
-          setConversations(data as Conversation[]);
-          if (!selectedConversation) {
-            setSelectedConversation(data[0] as Conversation);
-          }
-        } else {
-          // Provide interactive sample conversations if database is empty
-          loadSampleData();
-        }
-      } else {
-        loadSampleData();
+      if (!user) {
+        setLoadingConversations(false);
+        return;
       }
-    } catch {
-      loadSampleData();
+
+      const { data, error } = await supabase
+        .from("conversations")
+        .select("*, contact:contacts(*)")
+        .eq("user_id", user.id)
+        .order("last_message_at", { ascending: false });
+
+      if (error) {
+        console.error("Error fetching conversations:", error);
+      } else {
+        setConversations((data as Conversation[]) || []);
+        if (data && data.length > 0 && !selectedConversation) {
+          setSelectedConversation(data[0] as Conversation);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load conversations:", err);
+    } finally {
+      setLoadingConversations(false);
     }
-  };
-
-  const loadSampleData = () => {
-    const samples: Conversation[] = [
-      {
-        id: "conv-1",
-        contact_id: "c-1",
-        status: "open",
-        ai_status: "active",
-        ai_paused_until: null,
-        last_message_at: new Date().toISOString(),
-        last_incoming_message_at: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
-        unread_count: 0,
-        contact: {
-          id: "c-1",
-          name: "Rajesh Sharma",
-          phone_number: "+919820112233",
-          email: "rajesh@techcorp.in",
-          company: "TechCorp Mumbai",
-          tags: ["Enterprise", "VIP", "Mumbai"],
-          notes: "Interested in WhatsApp AI bot integration for enterprise customer support.",
-          consent_status: "opted_in",
-          ai_enabled: true,
-        },
-      },
-      {
-        id: "conv-2",
-        contact_id: "c-2",
-        status: "open",
-        ai_status: "paused_by_user",
-        ai_paused_until: new Date(Date.now() + 1000 * 60 * 25).toISOString(),
-        last_message_at: new Date(Date.now() - 1000 * 60 * 65).toISOString(),
-        last_incoming_message_at: new Date(Date.now() - 1000 * 60 * 70).toISOString(),
-        unread_count: 1,
-        contact: {
-          id: "c-2",
-          name: "Ananya Patel",
-          phone_number: "+919876543210",
-          email: "ananya@designstudio.com",
-          company: "Studio Bloom",
-          tags: ["Design", "Prospect"],
-          notes: "Asked about custom system prompt settings.",
-          consent_status: "opted_in",
-          ai_enabled: true,
-        },
-      },
-      {
-        id: "conv-3",
-        contact_id: "c-3",
-        status: "open",
-        ai_status: "active",
-        ai_paused_until: null,
-        last_message_at: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-        last_incoming_message_at: new Date(Date.now() - 1000 * 60 * 190).toISOString(),
-        unread_count: 0,
-        contact: {
-          id: "c-3",
-          name: "Vikram Malhotra",
-          phone_number: "+919988776655",
-          email: "vikram@fintech.co",
-          company: "FinEdge Solutions",
-          tags: ["Fintech", "Follow-up"],
-          notes: "Requested a demo walkthrough in Hinglish.",
-          consent_status: "opted_in",
-          ai_enabled: true,
-        },
-      },
-    ];
-
-    setConversations(samples);
-    setSelectedConversation(samples[0]);
-  };
+  }, [selectedConversation, supabase]);
 
   useEffect(() => {
-    loadConversations();
+    fetchConversations();
 
-    // Fetch templates
+    // Fetch message templates
     fetch("/api/whatsapp/templates")
       .then((res) => res.json())
       .then((data) => {
         if (data.templates) setTemplates(data.templates);
       })
       .catch(() => {});
-  }, []);
+  }, [fetchConversations]);
 
-  // 2. Load Messages for Selected Conversation
+  // 2. Fetch Messages for Selected Conversation (Strictly Real Data)
   useEffect(() => {
-    if (!selectedConversation) return;
+    if (!selectedConversation) {
+      setMessages([]);
+      setContactMemory(null);
+      return;
+    }
 
     const fetchMessages = async () => {
       setLoadingMessages(true);
       try {
-        const supabase = createClient();
         const { data, error } = await supabase
           .from("messages")
           .select("*")
           .eq("conversation_id", selectedConversation.id)
           .order("created_at", { ascending: true });
 
-        if (data && data.length > 0) {
+        if (!error && data) {
           setMessages(data as Message[]);
         } else {
-          // Sample conversation messages
-          if (selectedConversation.id === "conv-1") {
-            setMessages([
-              {
-                id: "m-1",
-                conversation_id: "conv-1",
-                direction: "inbound",
-                sender_type: "contact",
-                content: "Namaste Atharva! Can you share details about your WhatsApp messaging platform?",
-                status: "read",
-                created_at: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-              },
-              {
-                id: "m-2",
-                conversation_id: "conv-1",
-                direction: "outbound",
-                sender_type: "ai_assistant",
-                content:
-                  "Namaste Rajesh ji! Absolutely. Atharva Chat connects your official WhatsApp Business Cloud API with an autonomous AI representative. It handles customer inquiries, supports Hinglish/Marathi/English, and complies with Meta 24-hr service policies. Would you like to see a demo?",
-                status: "read",
-                created_at: new Date(Date.now() - 1000 * 60 * 14).toISOString(),
-              },
-              {
-                id: "m-3",
-                conversation_id: "conv-1",
-                direction: "inbound",
-                sender_type: "contact",
-                content: "That sounds great. Are the AI models free to use?",
-                status: "read",
-                created_at: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
-              },
-              {
-                id: "m-4",
-                conversation_id: "conv-1",
-                direction: "outbound",
-                sender_type: "ai_assistant",
-                content:
-                  "Yes, exactly! The platform dynamically discovers free OpenRouter models (like Llama 3.3 70B & Gemini 2.0 Flash Free) with automatic zero-cost fallbacks. So no unexpected charges ever.",
-                status: "delivered",
-                created_at: new Date(Date.now() - 1000 * 60 * 9).toISOString(),
-              },
-            ]);
-          } else {
-            setMessages([
-              {
-                id: "m-20",
-                conversation_id: selectedConversation.id,
-                direction: "inbound",
-                sender_type: "contact",
-                content: "Hello Atharva, pinging to check up on our scheduled meeting.",
-                status: "read",
-                created_at: new Date(Date.now() - 1000 * 60 * 70).toISOString(),
-              },
-            ]);
-          }
+          setMessages([]);
         }
 
         // Fetch AI memory for this contact
@@ -279,15 +184,10 @@ export default function WhatsAppMessagingPage() {
           .eq("conversation_id", selectedConversation.id)
           .maybeSingle();
 
-        setContactMemory(
-          mem || {
-            summary: "Prospect discussing enterprise WhatsApp AI bot integration and free models.",
-            key_facts: ["Company: TechCorp Mumbai", "Prefers Hinglish & English", "Interested in free OpenRouter models"],
-            sentiment: "Positive / Highly Engaged",
-          }
-        );
-      } catch {
-        // Fallback
+        setContactMemory(mem || null);
+      } catch (err) {
+        console.error("Failed to load messages:", err);
+        setMessages([]);
       } finally {
         setLoadingMessages(false);
         setTimeout(scrollToBottom, 100);
@@ -295,9 +195,129 @@ export default function WhatsAppMessagingPage() {
     };
 
     fetchMessages();
-  }, [selectedConversation]);
+  }, [selectedConversation, supabase]);
 
-  // 3. Send Message Action
+  // 3. Supabase Realtime Subscriptions (Live WhatsApp Chat Behavior)
+  useEffect(() => {
+    let channel: any = null;
+
+    const setupRealtime = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      channel = supabase
+        .channel(`whatsapp_realtime_${user.id}`)
+        // Listen to Messages changes
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "messages",
+            filter: `user_id=eq.${user.id}`,
+          },
+          (payload) => {
+            if (payload.eventType === "INSERT") {
+              const newMsg = payload.new as Message;
+              if (selectedConversation && newMsg.conversation_id === selectedConversation.id) {
+                setMessages((prev) => {
+                  if (prev.some((m) => m.id === newMsg.id || (newMsg.whatsapp_message_id && m.whatsapp_message_id === newMsg.whatsapp_message_id))) {
+                    return prev;
+                  }
+                  return [...prev, newMsg];
+                });
+                setTimeout(scrollToBottom, 50);
+              }
+              // Update conversation snippet in list
+              setConversations((prev) =>
+                prev.map((c) =>
+                  c.id === newMsg.conversation_id
+                    ? { ...c, last_message_at: newMsg.created_at }
+                    : c
+                )
+              );
+            } else if (payload.eventType === "UPDATE") {
+              const updatedMsg = payload.new as Message;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === updatedMsg.id ||
+                  (updatedMsg.whatsapp_message_id && m.whatsapp_message_id === updatedMsg.whatsapp_message_id)
+                    ? { ...m, ...updatedMsg }
+                    : m
+                )
+              );
+            }
+          }
+        )
+        // Listen to Conversations changes
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "conversations",
+            filter: `user_id=eq.${user.id}`,
+          },
+          (payload) => {
+            if (payload.eventType === "UPDATE") {
+              const updatedConv = payload.new as Conversation;
+              setConversations((prev) =>
+                prev.map((c) =>
+                  c.id === updatedConv.id
+                    ? { ...c, ...updatedConv, contact: c.contact }
+                    : c
+                )
+              );
+              if (selectedConversation && selectedConversation.id === updatedConv.id) {
+                setSelectedConversation((prev) =>
+                  prev ? { ...prev, ...updatedConv, contact: prev.contact } : null
+                );
+              }
+            } else if (payload.eventType === "INSERT") {
+              fetchConversations();
+            }
+          }
+        )
+        // Listen to Contacts changes
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "contacts",
+            filter: `user_id=eq.${user.id}`,
+          },
+          (payload) => {
+            if (payload.eventType === "UPDATE") {
+              const updatedContact = payload.new as Contact;
+              setConversations((prev) =>
+                prev.map((c) =>
+                  c.contact_id === updatedContact.id
+                    ? { ...c, contact: updatedContact }
+                    : c
+                )
+              );
+              if (selectedConversation && selectedConversation.contact_id === updatedContact.id) {
+                setSelectedConversation((prev) =>
+                  prev ? { ...prev, contact: updatedContact } : null
+                );
+              }
+            }
+          }
+        )
+        .subscribe();
+    };
+
+    setupRealtime();
+
+    return () => {
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+    };
+  }, [selectedConversation, supabase, fetchConversations]);
+
+  // 4. Send Message Handler (Real WhatsApp Cloud API)
   const handleSendMessage = async (overrideText?: string, isTemplate = false, templateName?: string) => {
     const textToSend = overrideText || inputText;
     if (!textToSend.trim() && !isTemplate) return;
@@ -306,9 +326,9 @@ export default function WhatsAppMessagingPage() {
     setSending(true);
     setErrorToast(null);
 
-    const optimisticId = `msg-${Date.now()}`;
-    const newMsg: Message = {
-      id: optimisticId,
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMessage: Message = {
+      id: tempId,
       conversation_id: selectedConversation.id,
       direction: "outbound",
       sender_type: "human_user",
@@ -318,7 +338,7 @@ export default function WhatsAppMessagingPage() {
       created_at: new Date().toISOString(),
     };
 
-    setMessages((prev) => [...prev, newMsg]);
+    setMessages((prev) => [...prev, optimisticMessage]);
     setInputText("");
     setTimeout(scrollToBottom, 50);
 
@@ -338,27 +358,35 @@ export default function WhatsAppMessagingPage() {
       const data = await res.json();
 
       if (!res.ok || data.error) {
-        // Mark message as failed
+        // Mark optimistic message as failed
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === optimisticId
-              ? { ...m, status: "failed", error_message: data.error || "Failed to send" }
+            m.id === tempId
+              ? { ...m, status: "failed", error_message: data.error || "Failed to send message via WhatsApp Cloud API" }
               : m
           )
         );
-        setErrorToast(data.error || "Failed to deliver message via WhatsApp Cloud API");
+        setErrorToast(data.error || "Failed to send message");
+        if (data.requiresTemplate) {
+          setShowTemplateModal(true);
+        }
       } else {
-        // Update message status to sent
+        // Updated with confirmed WhatsApp message ID
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === optimisticId
-              ? { ...m, status: "sent", id: data.message?.id || optimisticId }
+            m.id === tempId
+              ? {
+                  ...m,
+                  id: data.message?.id || tempId,
+                  whatsapp_message_id: data.whatsappMessageId,
+                  status: "sent",
+                }
               : m
           )
         );
-        setSuccessToast("Message sent successfully via WhatsApp Cloud API");
+        setSuccessToast("Message sent via WhatsApp Cloud API");
 
-        // When human sends message, AI is paused
+        // Optimistically pause AI for takeover
         setSelectedConversation((prev) =>
           prev
             ? {
@@ -372,12 +400,12 @@ export default function WhatsAppMessagingPage() {
     } catch (err: unknown) {
       setMessages((prev) =>
         prev.map((m) =>
-          m.id === optimisticId
+          m.id === tempId
             ? { ...m, status: "failed", error_message: err instanceof Error ? err.message : "Network error" }
             : m
         )
       );
-      setErrorToast("Connection error sending message.");
+      setErrorToast("Connection error attempting to reach Meta Graph API.");
     } finally {
       setSending(false);
       setTimeout(() => {
@@ -387,11 +415,68 @@ export default function WhatsAppMessagingPage() {
     }
   };
 
-  // 4. Resume AI for this conversation
+  // 5. Start New Chat Modal Handler
+  const handleStartNewChat = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newChatPhone.trim()) return;
+
+    setCreatingChat(true);
+    setErrorToast(null);
+
+    try {
+      const res = await fetch("/api/conversations/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phoneNumber: newChatPhone,
+          name: newChatName,
+          countryCode: newChatCountry,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        setErrorToast(data.error || "Failed to create conversation");
+        setCreatingChat(false);
+        return;
+      }
+
+      const newConv = data.conversation as Conversation;
+
+      // Add to conversations list if not present, and select it
+      setConversations((prev) => {
+        const exists = prev.some((c) => c.id === newConv.id);
+        if (exists) {
+          return prev.map((c) => (c.id === newConv.id ? newConv : c));
+        }
+        return [newConv, ...prev];
+      });
+
+      setSelectedConversation(newConv);
+      setShowNewChatModal(false);
+      setNewChatPhone("");
+      setNewChatName("");
+
+      // If initial message provided, send it
+      if (newChatInitialMessage.trim()) {
+        const initialText = newChatInitialMessage.trim();
+        setNewChatInitialMessage("");
+        setTimeout(() => {
+          handleSendMessage(initialText);
+        }, 300);
+      }
+    } catch (err: unknown) {
+      setErrorToast(err instanceof Error ? err.message : "Error starting conversation");
+    } finally {
+      setCreatingChat(false);
+    }
+  };
+
+  // 6. Resume AI takeover
   const handleResumeAi = async () => {
     if (!selectedConversation) return;
     try {
-      const supabase = createClient();
       await supabase
         .from("conversations")
         .update({ ai_status: "active", ai_paused_until: null })
@@ -400,7 +485,8 @@ export default function WhatsAppMessagingPage() {
       setSelectedConversation((prev) =>
         prev ? { ...prev, ai_status: "active", ai_paused_until: null } : null
       );
-      setSuccessToast("Atharva AI has been resumed for this conversation.");
+      setSuccessToast("Atharva AI resumed for this conversation.");
+      setTimeout(() => setSuccessToast(null), 3000);
     } catch {
       setSelectedConversation((prev) =>
         prev ? { ...prev, ai_status: "active", ai_paused_until: null } : null
@@ -408,41 +494,33 @@ export default function WhatsAppMessagingPage() {
     }
   };
 
-  // 5. Toggle Contact AI
+  // 7. Toggle Contact AI
   const handleToggleContactAi = async () => {
     if (!selectedConversation) return;
     const newAiState = !selectedConversation.contact.ai_enabled;
 
     try {
-      const supabase = createClient();
       await supabase
         .from("contacts")
         .update({ ai_enabled: newAiState })
         .eq("id", selectedConversation.contact_id);
 
       setSelectedConversation((prev) =>
-        prev
-          ? {
-              ...prev,
-              contact: { ...prev.contact, ai_enabled: newAiState },
-            }
-          : null
+        prev ? { ...prev, contact: { ...prev.contact, ai_enabled: newAiState } } : null
       );
-      setSuccessToast(
-        newAiState ? "AI Assistant enabled for contact" : "AI Assistant disabled for contact"
-      );
+      setSuccessToast(newAiState ? "Atharva AI enabled for contact" : "Atharva AI disabled for contact");
+      setTimeout(() => setSuccessToast(null), 3000);
     } catch {}
   };
 
-  // 6. 24-Hour Customer Service Window calculation
+  // 8. 24-Hour Customer Service Window check
   const isInside24hWindow = () => {
-    if (!selectedConversation?.last_incoming_message_at) return true; // optimistic
+    if (!selectedConversation?.last_incoming_message_at) return false;
     const lastIncoming = new Date(selectedConversation.last_incoming_message_at).getTime();
     const twentyFourHours = 24 * 60 * 60 * 1000;
     return Date.now() - lastIncoming < twentyFourHours;
   };
 
-  // Filter conversations
   const filteredConversations = conversations.filter((c) => {
     const q = searchQuery.toLowerCase();
     const name = c.contact?.name?.toLowerCase() || "";
@@ -452,9 +530,9 @@ export default function WhatsAppMessagingPage() {
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] lg:h-screen bg-[#080d1a] text-slate-100 overflow-hidden select-none">
-      {/* Toast notifications */}
+      {/* Toast Alerts */}
       {errorToast && (
-        <div className="fixed top-5 right-5 z-50 p-4 rounded-xl bg-rose-500/90 text-white text-xs font-semibold shadow-2xl flex items-center space-x-2 backdrop-blur-md animate-in slide-in-from-top-4">
+        <div className="fixed top-5 right-5 z-50 p-4 rounded-xl bg-rose-500/90 text-white text-xs font-semibold shadow-2xl flex items-center space-x-2 backdrop-blur-md animate-in slide-in-from-top-4 max-w-md">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           <span>{errorToast}</span>
         </div>
@@ -470,13 +548,17 @@ export default function WhatsAppMessagingPage() {
           COLUMN 1: CONVERSATIONS LIST
          ========================================================================= */}
       <div className="w-full sm:w-80 md:w-96 bg-slate-950 border-r border-slate-800/80 flex flex-col flex-shrink-0">
-        {/* Search header */}
+        {/* Search & New Chat Header */}
         <div className="p-4 border-b border-slate-800/80 space-y-3">
           <div className="flex items-center justify-between">
             <h1 className="text-lg font-extrabold text-white tracking-tight">WhatsApp Chats</h1>
-            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">
-              {conversations.length} Active
-            </span>
+            <button
+              onClick={() => setShowNewChatModal(true)}
+              className="px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold shadow-md shadow-emerald-500/20 flex items-center space-x-1.5 transition-all"
+            >
+              <Plus className="w-3.5 h-3.5 stroke-[3]" />
+              <span>New Chat</span>
+            </button>
           </div>
 
           <div className="relative">
@@ -493,87 +575,102 @@ export default function WhatsAppMessagingPage() {
 
         {/* Conversation list */}
         <div className="flex-1 overflow-y-auto divide-y divide-slate-800/40">
-          {filteredConversations.map((conv) => {
-            const isSelected = selectedConversation?.id === conv.id;
-            return (
-              <div
-                key={conv.id}
-                onClick={() => setSelectedConversation(conv)}
-                className={`p-3.5 flex items-start space-x-3 cursor-pointer transition-all ${
-                  isSelected
-                    ? "bg-slate-900/90 border-l-4 border-emerald-400"
-                    : "hover:bg-slate-900/40"
-                }`}
-              >
-                {/* Avatar */}
-                <div className="relative flex-shrink-0">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-600/30 to-teal-500/30 text-emerald-300 font-bold text-sm flex items-center justify-center border border-emerald-500/20">
-                    {conv.contact?.name ? conv.contact.name.charAt(0) : "C"}
-                  </div>
-                  {conv.ai_status === "active" && (
-                    <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-teal-500 text-slate-950 flex items-center justify-center text-[9px] font-bold shadow">
-                      <Bot className="w-2.5 h-2.5" />
-                    </div>
-                  )}
-                </div>
-
-                {/* Details */}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-xs font-bold text-white truncate">
-                      {conv.contact?.name || formatPhoneNumber(conv.contact?.phone_number)}
-                    </p>
-                    <span className="text-[10px] text-slate-500 flex-shrink-0 ml-1">
-                      {formatRelativeDate(conv.last_message_at)}
-                    </span>
-                  </div>
-
-                  <p className="text-[11px] text-slate-400 truncate">
-                    {formatPhoneNumber(conv.contact?.phone_number)}
-                  </p>
-
-                  <div className="flex items-center space-x-2 mt-1.5">
-                    {conv.contact?.consent_status === "opted_out" ? (
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 font-semibold border border-rose-500/20">
-                        Opted Out
-                      </span>
-                    ) : (
-                      <span
-                        className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${
-                          conv.ai_status === "active"
-                            ? "bg-teal-500/10 text-teal-400 border border-teal-500/20"
-                            : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                        }`}
-                      >
-                        {conv.ai_status === "active" ? "AI Auto" : "Human Hold"}
-                      </span>
-                    )}
-
-                    {conv.unread_count > 0 && (
-                      <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-emerald-500 text-slate-950 font-bold ml-auto">
-                        {conv.unread_count}
-                      </span>
-                    )}
-                  </div>
-                </div>
+          {loadingConversations ? (
+            <div className="p-8 text-center text-slate-500 text-xs">
+              <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2 text-emerald-500" />
+              Loading conversations...
+            </div>
+          ) : filteredConversations.length === 0 ? (
+            <div className="p-8 text-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mx-auto text-slate-600">
+                <MessageSquarePlus className="w-6 h-6" />
               </div>
-            );
-          })}
+              <p className="text-xs font-bold text-slate-300">No conversations yet</p>
+              <p className="text-[11px] text-slate-500 leading-relaxed max-w-xs mx-auto">
+                Click <strong>"New Chat"</strong> above to enter any WhatsApp phone number and start messaging.
+              </p>
+            </div>
+          ) : (
+            filteredConversations.map((conv) => {
+              const isSelected = selectedConversation?.id === conv.id;
+              return (
+                <div
+                  key={conv.id}
+                  onClick={() => setSelectedConversation(conv)}
+                  className={`p-3.5 flex items-start space-x-3 cursor-pointer transition-all ${
+                    isSelected
+                      ? "bg-slate-900/90 border-l-4 border-emerald-400"
+                      : "hover:bg-slate-900/40"
+                  }`}
+                >
+                  <div className="relative flex-shrink-0">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-600/30 to-teal-500/30 text-emerald-300 font-bold text-sm flex items-center justify-center border border-emerald-500/20">
+                      {conv.contact?.name ? conv.contact.name.charAt(0).toUpperCase() : "C"}
+                    </div>
+                    {conv.ai_status === "active" && (
+                      <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-teal-500 text-slate-950 flex items-center justify-center text-[9px] font-bold shadow">
+                        <Bot className="w-2.5 h-2.5" />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-xs font-bold text-white truncate">
+                        {conv.contact?.name || formatPhoneNumber(conv.contact?.phone_number)}
+                      </p>
+                      <span className="text-[10px] text-slate-500 flex-shrink-0 ml-1">
+                        {formatRelativeDate(conv.last_message_at)}
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-400 truncate">
+                      {formatPhoneNumber(conv.contact?.phone_number)}
+                    </p>
+
+                    <div className="flex items-center space-x-2 mt-1.5">
+                      {conv.contact?.consent_status === "opted_out" ? (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 font-semibold border border-rose-500/20">
+                          Opted Out
+                        </span>
+                      ) : (
+                        <span
+                          className={`text-[9px] px-1.5 py-0.5 rounded font-semibold ${
+                            conv.ai_status === "active"
+                              ? "bg-teal-500/10 text-teal-400 border border-teal-500/20"
+                              : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                          }`}
+                        >
+                          {conv.ai_status === "active" ? "AI Auto" : "Human Hold"}
+                        </span>
+                      )}
+
+                      {conv.unread_count > 0 && (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-emerald-500 text-slate-950 font-bold ml-auto">
+                          {conv.unread_count}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
 
       {/* =========================================================================
-          COLUMN 2: CENTER CHAT AREA
+          COLUMN 2: CHAT AREA
          ========================================================================= */}
       <div className="flex-1 flex flex-col bg-[#0b141a] relative overflow-hidden">
         {selectedConversation ? (
           <>
-            {/* Chat Top Bar */}
+            {/* Top Bar */}
             <div className="h-16 px-6 bg-slate-950/80 border-b border-slate-800/80 backdrop-blur-md flex items-center justify-between z-10">
               <div className="flex items-center space-x-3">
                 <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 font-bold flex items-center justify-center border border-emerald-500/25">
                   {selectedConversation.contact?.name
-                    ? selectedConversation.contact.name.charAt(0)
+                    ? selectedConversation.contact.name.charAt(0).toUpperCase()
                     : "C"}
                 </div>
                 <div>
@@ -581,7 +678,7 @@ export default function WhatsAppMessagingPage() {
                     <h2 className="text-sm font-bold text-white">
                       {selectedConversation.contact?.name || "Customer"}
                     </h2>
-                    <span className="text-[10px] text-emerald-400 font-medium">
+                    <span className="text-[10px] text-emerald-400 font-medium font-mono">
                       {formatPhoneNumber(selectedConversation.contact?.phone_number)}
                     </span>
                   </div>
@@ -614,14 +711,14 @@ export default function WhatsAppMessagingPage() {
             {selectedConversation.ai_status === "paused_by_user" && (
               <div className="px-6 py-2 bg-amber-500/10 border-b border-amber-500/20 flex items-center justify-between text-xs text-amber-300">
                 <div className="flex items-center space-x-2">
-                  <Pause className="w-3.5 h-3.5 text-amber-400" />
+                  <Pause className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
                   <span>
-                    Human takeover mode: Atharva AI is paused for this conversation to prevent overlapping replies.
+                    Human takeover: Atharva AI is paused for this conversation to prevent overlapping replies.
                   </span>
                 </div>
                 <button
                   onClick={handleResumeAi}
-                  className="font-bold underline hover:text-white"
+                  className="font-bold underline hover:text-white ml-2 flex-shrink-0"
                 >
                   Resume AI Now
                 </button>
@@ -632,8 +729,18 @@ export default function WhatsAppMessagingPage() {
             <div className="flex-1 overflow-y-auto p-6 space-y-4 wa-chat-pattern">
               {loadingMessages ? (
                 <div className="h-full flex items-center justify-center text-slate-500 text-xs">
-                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                  Loading message history...
+                  <Loader2 className="w-5 h-5 animate-spin mr-2 text-emerald-500" />
+                  Loading message history from database...
+                </div>
+              ) : messages.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-slate-500 space-y-2 text-center p-6">
+                  <Bot className="w-10 h-10 text-slate-700" />
+                  <p className="text-sm font-bold text-slate-300">No messages yet in this conversation</p>
+                  <p className="text-xs text-slate-500 max-w-sm">
+                    {isInside24hWindow()
+                      ? "Send a message below to start chatting."
+                      : "The 24-hour service window is closed. Choose an approved WhatsApp Message Template to initiate messaging."}
+                  </p>
                 </div>
               ) : (
                 messages.map((msg) => {
@@ -643,7 +750,6 @@ export default function WhatsAppMessagingPage() {
                       key={msg.id}
                       className={`flex flex-col ${isInbound ? "items-start" : "items-end"}`}
                     >
-                      {/* Sender label badge */}
                       <span className="text-[10px] text-slate-500 mb-1 px-1">
                         {isInbound ? (
                           selectedConversation.contact?.name || "Customer"
@@ -659,7 +765,6 @@ export default function WhatsAppMessagingPage() {
                         )}
                       </span>
 
-                      {/* Bubble */}
                       <div
                         className={`max-w-[75%] rounded-2xl px-4 py-2.5 shadow-md relative ${
                           isInbound
@@ -671,11 +776,10 @@ export default function WhatsAppMessagingPage() {
                       >
                         <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
 
-                        {/* Status ticks & timestamp */}
                         <div className="flex items-center justify-end space-x-1.5 mt-1 text-[10px] text-slate-300/80">
                           <span>{formatMessageTime(msg.created_at)}</span>
                           {!isInbound && (
-                            <span>
+                            <span title={msg.status}>
                               {msg.status === "read" ? (
                                 <CheckCheck className="w-3.5 h-3.5 text-sky-400 stroke-[2.5]" />
                               ) : msg.status === "delivered" ? (
@@ -685,7 +789,7 @@ export default function WhatsAppMessagingPage() {
                               ) : msg.status === "failed" ? (
                                 <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
                               ) : (
-                                <Clock className="w-3 h-3 text-slate-400" />
+                                <Loader2 className="w-3 h-3 animate-spin text-slate-400" />
                               )}
                             </span>
                           )}
@@ -712,12 +816,12 @@ export default function WhatsAppMessagingPage() {
                   <div className="flex items-center space-x-2">
                     <Clock className="w-4 h-4 text-amber-400 flex-shrink-0" />
                     <span>
-                      24-hour customer window expired. WhatsApp policy requires sending an approved template.
+                      24-hour service window closed. WhatsApp requires an approved Message Template to send messages.
                     </span>
                   </div>
                   <button
                     onClick={() => setShowTemplateModal(true)}
-                    className="px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 font-bold"
+                    className="px-2.5 py-1 rounded-md bg-amber-500/20 hover:bg-amber-500/30 font-bold ml-2 flex-shrink-0"
                   >
                     Select Template
                   </button>
@@ -729,7 +833,7 @@ export default function WhatsAppMessagingPage() {
                 <div className="mb-3 p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-400 flex items-center space-x-2">
                   <AlertCircle className="w-4 h-4 flex-shrink-0" />
                   <span>
-                    Contact has opted out of WhatsApp messages. Sending is blocked until contact replies "START".
+                    Contact has opted out of WhatsApp messages. Messaging is blocked until the recipient replies "START".
                   </span>
                 </div>
               )}
@@ -741,27 +845,28 @@ export default function WhatsAppMessagingPage() {
                 }}
                 className="flex items-center space-x-2"
               >
-                {/* Templates button */}
                 <button
                   type="button"
                   onClick={() => setShowTemplateModal(true)}
-                  title="Send WhatsApp Template"
+                  title="Send Approved WhatsApp Template"
                   className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition-colors"
                 >
                   <FileCode className="w-4 h-4" />
                 </button>
 
-                {/* Input Text Box */}
                 <input
                   type="text"
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
-                  placeholder="Type a message (or reply as Atharva)..."
+                  placeholder={
+                    isInside24hWindow()
+                      ? "Type a WhatsApp message..."
+                      : "Window closed. Select a template or type to attempt..."
+                  }
                   disabled={sending || selectedConversation.contact?.consent_status === "opted_out"}
                   className="flex-1 px-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
                 />
 
-                {/* Send Button */}
                 <button
                   type="submit"
                   disabled={
@@ -777,43 +882,55 @@ export default function WhatsAppMessagingPage() {
             </div>
           </>
         ) : (
-          <div className="h-full flex flex-col items-center justify-center text-slate-500 p-8 text-center space-y-3">
-            <Bot className="w-12 h-12 text-slate-700" />
-            <h3 className="text-lg font-bold text-slate-300">Select a Conversation</h3>
-            <p className="text-xs text-slate-500 max-w-sm">
-              Choose an active WhatsApp chat from the left panel to read incoming messages and interact.
-            </p>
+          <div className="h-full flex flex-col items-center justify-center text-slate-500 p-8 text-center space-y-4">
+            <div className="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-600">
+              <Bot className="w-8 h-8" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-lg font-bold text-slate-300">No Conversation Selected</h3>
+              <p className="text-xs text-slate-500 max-w-sm">
+                Select an existing WhatsApp conversation from the left or start a new chat.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowNewChatModal(true)}
+              className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 flex items-center space-x-2 transition-all"
+            >
+              <Plus className="w-4 h-4 stroke-[3]" />
+              <span>Start New WhatsApp Chat</span>
+            </button>
           </div>
         )}
       </div>
 
       {/* =========================================================================
-          COLUMN 3: RIGHT CONTACT DETAILS & AI MEMORY
+          COLUMN 3: CONTACT DETAILS & AI MEMORY
          ========================================================================= */}
       {selectedConversation && (
         <div className="hidden xl:flex w-80 bg-slate-950 border-l border-slate-800/80 flex-col overflow-y-auto p-5 space-y-6 flex-shrink-0">
-          {/* Profile header */}
           <div className="text-center pb-5 border-b border-slate-800/80">
             <div className="w-16 h-16 mx-auto rounded-full bg-gradient-to-tr from-emerald-600 to-teal-400 text-slate-950 font-extrabold text-2xl flex items-center justify-center shadow-lg shadow-emerald-500/20 mb-3">
-              {selectedConversation.contact?.name ? selectedConversation.contact.name.charAt(0) : "C"}
+              {selectedConversation.contact?.name
+                ? selectedConversation.contact.name.charAt(0).toUpperCase()
+                : "C"}
             </div>
             <h3 className="font-extrabold text-base text-white">
               {selectedConversation.contact?.name || "Customer"}
             </h3>
-            <p className="text-xs text-emerald-400 font-medium mt-0.5">
+            <p className="text-xs text-emerald-400 font-medium font-mono mt-0.5">
               {formatPhoneNumber(selectedConversation.contact?.phone_number)}
             </p>
             <p className="text-xs text-slate-400 mt-1">
-              {selectedConversation.contact?.company || "Individual Contact"}
+              {selectedConversation.contact?.company || "Direct WhatsApp Contact"}
             </p>
           </div>
 
-          {/* AI Control for this contact */}
+          {/* AI Control */}
           <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold text-white flex items-center space-x-2">
                 <Bot className="w-4 h-4 text-teal-400" />
-                <span>Atharva AI for Contact</span>
+                <span>Atharva AI Auto-Reply</span>
               </span>
               <button
                 onClick={handleToggleContactAi}
@@ -829,14 +946,14 @@ export default function WhatsAppMessagingPage() {
               </button>
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              When enabled, Atharva AI automatically replies to incoming inquiries from this phone number.
+              When enabled, Atharva AI answers customer inquiries automatically in your tone.
             </p>
           </div>
 
-          {/* Consent / Policy status */}
-          <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
+          {/* WhatsApp Window & Consent */}
+          <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2.5">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-              WhatsApp Policy & Consent
+              WhatsApp Policy State
             </span>
             <div className="flex items-center justify-between text-xs pt-1">
               <span className="text-slate-300">Consent Status</span>
@@ -851,7 +968,7 @@ export default function WhatsAppMessagingPage() {
               </span>
             </div>
             <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-300">24-Hr Service Window</span>
+              <span className="text-slate-300">24-Hr Window</span>
               <span
                 className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                   isInside24hWindow()
@@ -859,7 +976,7 @@ export default function WhatsAppMessagingPage() {
                     : "bg-amber-500/15 text-amber-400"
                 }`}
               >
-                {isInside24hWindow() ? "Active Window" : "Expired (Template Req.)"}
+                {isInside24hWindow() ? "Open (Free Text OK)" : "Closed (Template Req.)"}
               </span>
             </div>
           </div>
@@ -871,19 +988,21 @@ export default function WhatsAppMessagingPage() {
                 <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
                 <span>AI Memory & Facts</span>
               </span>
-              <button
-                onClick={() => setContactMemory(null)}
-                title="Clear Memory"
-                className="text-slate-500 hover:text-rose-400 transition-colors"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+              {contactMemory && (
+                <button
+                  onClick={() => setContactMemory(null)}
+                  title="Clear Memory"
+                  className="text-slate-500 hover:text-rose-400 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
 
-            {contactMemory ? (
+            {contactMemory?.summary ? (
               <div className="space-y-2 text-[11px] text-slate-400">
                 <p className="italic text-slate-300">"{contactMemory.summary}"</p>
-                {contactMemory.key_facts && (
+                {contactMemory.key_facts && Array.isArray(contactMemory.key_facts) && (
                   <ul className="list-disc pl-4 space-y-1 text-slate-400">
                     {contactMemory.key_facts.map((fact: string, idx: number) => (
                       <li key={idx}>{fact}</li>
@@ -892,7 +1011,7 @@ export default function WhatsAppMessagingPage() {
                 )}
               </div>
             ) : (
-              <p className="text-[11px] text-slate-500">No memory collected yet.</p>
+              <p className="text-[11px] text-slate-500 italic">No memory collected yet.</p>
             )}
           </div>
 
@@ -900,74 +1019,170 @@ export default function WhatsAppMessagingPage() {
           <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Tags</span>
             <div className="flex flex-wrap gap-1.5 pt-1">
-              {(selectedConversation.contact?.tags || ["Prospect"]).map((t, idx) => (
-                <span
-                  key={idx}
-                  className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 text-[10px] font-medium border border-slate-700"
-                >
-                  {t}
-                </span>
-              ))}
+              {(selectedConversation.contact?.tags && selectedConversation.contact.tags.length > 0) ? (
+                selectedConversation.contact.tags.map((t, idx) => (
+                  <span
+                    key={idx}
+                    className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 text-[10px] font-medium border border-slate-700"
+                  >
+                    #{t}
+                  </span>
+                ))
+              ) : (
+                <span className="text-[11px] text-slate-500 italic">No tags</span>
+              )}
             </div>
-          </div>
-
-          {/* Notes */}
-          <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Notes</span>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              {selectedConversation.contact?.notes || "No notes added for this contact."}
-            </p>
           </div>
         </div>
       )}
 
-      {/* Template Modal */}
-      {showTemplateModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
+      {/* =========================================================================
+          NEW CHAT MODAL (LIKE REAL WHATSAPP)
+         ========================================================================= */}
+      {showNewChatModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl animate-in zoom-in-95">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="font-bold text-white text-base">Select WhatsApp Template</h3>
+              <div className="flex items-center space-x-2">
+                <MessageSquarePlus className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-bold text-white text-base">New WhatsApp Chat</h3>
+              </div>
               <button
-                onClick={() => setShowTemplateModal(false)}
+                onClick={() => setShowNewChatModal(false)}
                 className="text-slate-400 hover:text-white"
               >
-                ✕
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleStartNewChat} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                  Country Code
+                </label>
+                <select
+                  value={newChatCountry}
+                  onChange={(e) => setNewChatCountry(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                >
+                  {COUNTRY_CODES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.country} ({c.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                  WhatsApp Phone Number *
+                </label>
+                <div className="flex items-center space-x-2">
+                  <span className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs font-mono text-emerald-400">
+                    {newChatCountry}
+                  </span>
+                  <input
+                    type="tel"
+                    required
+                    value={newChatPhone}
+                    onChange={(e) => setNewChatPhone(e.target.value)}
+                    placeholder="9876543210"
+                    className="flex-1 px-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Enter any mobile number. It will be normalized into international E.164 format.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                  Contact Name (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={newChatName}
+                  onChange={(e) => setNewChatName(e.target.value)}
+                  placeholder="e.g. John Doe / Business Client"
+                  className="w-full px-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                  Initial Message (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  value={newChatInitialMessage}
+                  onChange={(e) => setNewChatInitialMessage(e.target.value)}
+                  placeholder="Hey, how are you?..."
+                  className="w-full px-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-3 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowNewChatModal(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={creatingChat || !newChatPhone.trim()}
+                  className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow-md shadow-emerald-500/20 flex items-center space-x-1.5 disabled:opacity-50"
+                >
+                  {creatingChat ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  <span>Start Conversation</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TEMPLATE PICKER MODAL
+         ========================================================================= */}
+      {showTemplateModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl animate-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center space-x-2">
+                <FileCode className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-bold text-white text-base">Select Approved Template</h3>
+              </div>
+              <button onClick={() => setShowTemplateModal(false)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="space-y-3 max-h-72 overflow-y-auto">
-              {(templates.length > 0
-                ? templates
-                : [
-                    {
-                      name: "hello_world",
-                      category: "MARKETING",
-                      language: "en_US",
-                      body_text: "Welcome and thank you for connecting with us! Reply to this message to chat.",
-                    },
-                    {
-                      name: "meeting_followup",
-                      category: "UTILITY",
-                      language: "en_US",
-                      body_text: "Hi {{1}}, this is Atharva following up regarding our discussion. Let me know when you're free.",
-                    },
-                  ]
-              ).map((tpl, i) => (
-                <div
-                  key={i}
-                  onClick={() => {
-                    handleSendMessage(tpl.body_text, true, tpl.name);
-                    setShowTemplateModal(false);
-                  }}
-                  className="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-emerald-500 cursor-pointer transition-colors"
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-bold text-emerald-400">{tpl.name}</span>
-                    <span className="text-[10px] uppercase font-bold text-slate-500">{tpl.category}</span>
-                  </div>
-                  <p className="text-xs text-slate-300">{tpl.body_text}</p>
+              {templates.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-500">
+                  <p>No templates synced yet from Meta.</p>
+                  <p className="mt-1 text-[11px]">Go to the <strong>Message Templates</strong> page to sync your approved templates.</p>
                 </div>
-              ))}
+              ) : (
+                templates.map((tpl, i) => (
+                  <div
+                    key={tpl.id || i}
+                    onClick={() => {
+                      handleSendMessage(tpl.body_text, true, tpl.name);
+                      setShowTemplateModal(false);
+                    }}
+                    className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-emerald-500 cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-bold text-emerald-400 font-mono">{tpl.name}</span>
+                      <span className="text-[10px] uppercase font-bold text-slate-500">{tpl.category}</span>
+                    </div>
+                    <p className="text-xs text-slate-300 leading-relaxed">{tpl.body_text}</p>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>

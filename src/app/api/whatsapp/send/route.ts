@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { decryptCredential } from "@/lib/crypto";
 import { sendWhatsAppTextMessage, sendWhatsAppTemplateMessage } from "@/lib/whatsapp";
 import { cleanPhoneNumber } from "@/lib/utils";
+import { getEnvWhatsAppConfig } from "@/lib/config";
 
 export async function POST(req: NextRequest) {
   try {
@@ -53,67 +54,85 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Fetch connected WhatsApp Account
-    const { data: waAccount, error: accErr } = await supabase
+    // 2. Resolve WhatsApp Account credentials (DB or Environment Variables)
+    const { data: waAccount } = await supabase
       .from("whatsapp_accounts")
       .select("*")
       .eq("user_id", user.id)
       .eq("status", "connected")
-      .single();
+      .maybeSingle();
 
-    if (accErr || !waAccount) {
+    const envConfig = getEnvWhatsAppConfig();
+    let phoneNumberId = waAccount?.phone_number_id || envConfig.phoneNumberId;
+    let accessToken = "";
+
+    if (waAccount) {
+      try {
+        accessToken = decryptCredential({
+          ciphertext: waAccount.encrypted_access_token,
+          iv: waAccount.access_token_iv,
+          tag: waAccount.access_token_tag,
+        });
+      } catch {
+        console.error("Failed to decrypt DB WhatsApp credentials.");
+      }
+    }
+
+    if (!accessToken && envConfig.accessToken) {
+      accessToken = envConfig.accessToken;
+    }
+
+    if (!phoneNumberId || !accessToken) {
       return NextResponse.json(
-        { error: "No active WhatsApp account connected. Please connect in WhatsApp Connection page." },
+        {
+          error:
+            "No active WhatsApp Cloud API credentials configured. Please connect your credentials on the WhatsApp Connection page or configure Vercel environment variables.",
+        },
         { status: 400 }
       );
     }
 
-    // 3. Decrypt Permanent Access Token
-    let accessToken = "";
-    try {
-      accessToken = decryptCredential({
-        ciphertext: waAccount.encrypted_access_token,
-        iv: waAccount.access_token_iv,
-        tag: waAccount.access_token_tag,
-      });
-    } catch {
-      return NextResponse.json(
-        { error: "Failed to decrypt WhatsApp credentials. Please re-enter them in Connection settings." },
-        { status: 500 }
-      );
-    }
+    // 3. Verify 24-hour customer window for free-form messages
+    if (messageType === "text" && conversationId) {
+      const { data: conv } = await supabase
+        .from("conversations")
+        .select("last_incoming_message_at")
+        .eq("id", conversationId)
+        .single();
 
-    // 4. Verify 24-hour customer window for free-form messages
-    if (messageType === "text") {
-      let isWithin24Hours = false;
-
-      if (conversationId) {
-        const { data: conv } = await supabase
-          .from("conversations")
-          .select("last_incoming_message_at")
-          .eq("id", conversationId)
-          .single();
-
-        if (conv?.last_incoming_message_at) {
-          const lastIncoming = new Date(conv.last_incoming_message_at).getTime();
-          const twentyFourHoursAgo = Date.now() - 24 * 60 * 60 * 1000;
-          if (lastIncoming > twentyFourHoursAgo) {
-            isWithin24Hours = true;
-          }
-        }
+      if (!conv?.last_incoming_message_at) {
+        // Customer has never messaged first
+        return NextResponse.json(
+          {
+            error:
+              "WhatsApp Policy: The recipient has not sent an inbound message yet. Meta requires an approved WhatsApp Message Template to initiate a new conversation.",
+            requiresTemplate: true,
+          },
+          { status: 400 }
+        );
       }
 
-      // If outside 24h window, Meta will reject free-form messages.
-      // We will attempt sending anyway, and if Meta returns 131047, we display the helpful error.
+      const lastIncoming = new Date(conv.last_incoming_message_at).getTime();
+      const twentyFourHoursAgo = Date.now() - 24 * 60 * 60 * 1000;
+      if (lastIncoming < twentyFourHoursAgo) {
+        return NextResponse.json(
+          {
+            error:
+              "24-Hour WhatsApp Service Window Expired: Over 24 hours have passed since the customer's last message. WhatsApp policy strictly requires sending an approved Message Template to re-open this conversation.",
+            requiresTemplate: true,
+          },
+          { status: 400 }
+        );
+      }
     }
 
-    // 5. Send message via WhatsApp Cloud API
+    // 4. Send message via WhatsApp Cloud API
     let sendResult;
     const recipientPhone = cleanPhoneNumber(contact.phone_number);
 
     if (messageType === "template" && templateName) {
       sendResult = await sendWhatsAppTemplateMessage({
-        phoneNumberId: waAccount.phone_number_id,
+        phoneNumberId,
         accessToken,
         to: recipientPhone,
         templateName,
@@ -122,7 +141,7 @@ export async function POST(req: NextRequest) {
       });
     } else {
       sendResult = await sendWhatsAppTextMessage({
-        phoneNumberId: waAccount.phone_number_id,
+        phoneNumberId,
         accessToken,
         to: recipientPhone,
         text,
@@ -133,12 +152,12 @@ export async function POST(req: NextRequest) {
       const errorMsg =
         typeof sendResult.error === "string"
           ? sendResult.error
-          : sendResult.error?.message || "Failed to send message";
+          : sendResult.error?.message || "Failed to send WhatsApp message via Meta Cloud API";
 
       return NextResponse.json({ error: errorMsg }, { status: 400 });
     }
 
-    // 6. Ensure Conversation exists
+    // 5. Ensure Conversation exists
     let activeConvId = conversationId;
     if (!activeConvId) {
       const { data: conv } = await supabase
@@ -156,9 +175,10 @@ export async function POST(req: NextRequest) {
           .insert({
             user_id: user.id,
             contact_id: contactId,
-            whatsapp_account_id: waAccount.id,
+            whatsapp_account_id: waAccount?.id || null,
             status: "open",
             ai_status: "active",
+            last_message_at: new Date().toISOString(),
           })
           .select("id")
           .single();
@@ -166,7 +186,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 7. Human Takeover: When a human sends a message, temporarily pause AI for this conversation
+    // 6. Human Takeover: When a human sends a message, temporarily pause AI for this conversation
     const { data: aiSettings } = await supabase
       .from("ai_settings")
       .select("pause_duration_minutes")
@@ -186,7 +206,7 @@ export async function POST(req: NextRequest) {
       })
       .eq("id", activeConvId);
 
-    // 8. Record outgoing message in database
+    // 7. Record outgoing message in database
     const { data: savedMsg, error: msgErr } = await supabase
       .from("messages")
       .insert({

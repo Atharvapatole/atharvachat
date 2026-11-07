@@ -55,24 +55,8 @@ export default function CampaignsPage() {
   const [creating, setCreating] = useState(false);
 
   // Available tags & templates
-  const [availableTags, setAvailableTags] = useState<string[]>(["Enterprise", "VIP", "Mumbai", "Prospect"]);
-  const [templates, setTemplates] = useState<any[]>([
-    {
-      name: "hello_world",
-      category: "MARKETING",
-      body_text: "Welcome to Atharva Chat! We are excited to assist you on WhatsApp.",
-    },
-    {
-      name: "quarterly_update",
-      category: "MARKETING",
-      body_text: "Hi {{1}}, here is our latest product announcement for your business.",
-    },
-    {
-      name: "meeting_followup",
-      category: "UTILITY",
-      body_text: "Hello {{1}}, Atharva here following up on our project milestones.",
-    },
-  ]);
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
+  const [templates, setTemplates] = useState<any[]>([]);
 
   const [toastMsg, setToastMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -88,71 +72,52 @@ export default function CampaignsPage() {
       const { data: { user } } = await supabase.auth.getUser();
 
       if (user) {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from("campaigns")
           .select("*, template:message_templates(*)")
           .eq("user_id", user.id)
           .order("created_at", { ascending: false });
 
-        if (data && data.length > 0) {
+        if (!error && data) {
           setCampaigns(data as Campaign[]);
         } else {
-          loadSampleCampaigns();
+          setCampaigns([]);
+        }
+
+        // Load templates
+        const { data: tmpls } = await supabase
+          .from("message_templates")
+          .select("*")
+          .eq("user_id", user.id);
+
+        if (tmpls && tmpls.length > 0) {
+          setTemplates(tmpls);
+          setSelectedTemplateName(tmpls[0].name);
+        }
+
+        // Load distinct tags from contacts
+        const { data: contactData } = await supabase
+          .from("contacts")
+          .select("tags")
+          .eq("user_id", user.id);
+
+        if (contactData) {
+          const tagSet = new Set<string>();
+          contactData.forEach((c) => {
+            if (c.tags && Array.isArray(c.tags)) {
+              c.tags.forEach((t: string) => tagSet.add(t));
+            }
+          });
+          setAvailableTags(Array.from(tagSet));
         }
       } else {
-        loadSampleCampaigns();
+        setCampaigns([]);
       }
     } catch {
-      loadSampleCampaigns();
+      setCampaigns([]);
     } finally {
       setLoading(false);
     }
-  };
-
-  const loadSampleCampaigns = () => {
-    const samples: Campaign[] = [
-      {
-        id: "camp-1",
-        name: "Enterprise Product Launch Broadcast",
-        status: "completed",
-        scheduled_at: null,
-        target_tags: ["Enterprise", "VIP"],
-        total_recipients: 45,
-        sent_count: 45,
-        delivered_count: 44,
-        read_count: 41,
-        failed_count: 0,
-        opted_out_count: 1,
-        created_at: new Date(Date.now() - 86400000 * 2).toISOString(),
-        template_variables: { "1": "{{name}}" },
-        template: {
-          name: "quarterly_update",
-          body_text: "Hi {{1}}, here is our latest product announcement for your business.",
-          category: "MARKETING",
-        },
-      },
-      {
-        id: "camp-2",
-        name: "Mumbai VIP Follow-up",
-        status: "running",
-        scheduled_at: null,
-        target_tags: ["Mumbai"],
-        total_recipients: 24,
-        sent_count: 16,
-        delivered_count: 15,
-        read_count: 12,
-        failed_count: 0,
-        opted_out_count: 0,
-        created_at: new Date(Date.now() - 3600000 * 3).toISOString(),
-        template_variables: { "1": "{{name}}" },
-        template: {
-          name: "meeting_followup",
-          body_text: "Hello {{1}}, Atharva here following up on our project milestones.",
-          category: "UTILITY",
-        },
-      },
-    ];
-    setCampaigns(samples);
   };
 
   useEffect(() => {
@@ -299,7 +264,23 @@ export default function CampaignsPage() {
 
       {/* Campaigns List */}
       <div className="space-y-4">
-        {campaigns.map((camp) => {
+        {campaigns.length === 0 ? (
+          <div className="p-12 text-center rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
+            <Send className="w-10 h-10 text-slate-700 mx-auto" />
+            <p className="font-bold text-white text-base">No campaigns created yet.</p>
+            <p className="text-xs text-slate-400 max-w-sm mx-auto">
+              Create an approved template broadcast to message multiple opted-in WhatsApp contacts compliant with Meta policies.
+            </p>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="inline-flex items-center space-x-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shadow-md shadow-emerald-500/20"
+            >
+              <PlusCircle className="w-4 h-4" />
+              <span>Create First Campaign</span>
+            </button>
+          </div>
+        ) : (
+          campaigns.map((camp) => {
           const deliveryRate =
             camp.total_recipients > 0
               ? Math.round((camp.delivered_count / camp.total_recipients) * 100)
@@ -414,7 +395,7 @@ export default function CampaignsPage() {
               </div>
             </div>
           );
-        })}
+        }))}
       </div>
 
       {/* New Campaign Modal */}

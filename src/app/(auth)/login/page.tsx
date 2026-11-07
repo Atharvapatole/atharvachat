@@ -26,32 +26,19 @@ export default function LoginPage() {
       });
 
       if (authError) {
-        // If demo mode without Supabase connection, allow graceful exploration
-        if (authError.message.includes("fetch failed") || authError.message.includes("placeholder")) {
-          // Store local bypass demo flag
-          localStorage.setItem("atharva_demo_user", JSON.stringify({ email, id: "demo-user-123" }));
-          router.push("/dashboard");
-          return;
-        }
         setError(authError.message);
         return;
       }
 
       if (data.session) {
         router.push("/dashboard");
+        router.refresh();
       }
     } catch (err: unknown) {
-      // In case Supabase credentials are not configured yet, offer seamless demo entry
-      localStorage.setItem("atharva_demo_user", JSON.stringify({ email: email || "atharva@example.com", id: "demo-user-123" }));
-      router.push("/dashboard");
+      setError(err instanceof Error ? err.message : "Authentication failed");
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleDemoAccess = () => {
-    localStorage.setItem("atharva_demo_user", JSON.stringify({ email: "atharva@example.com", id: "demo-user-123" }));
-    router.push("/dashboard");
   };
 
   return (
@@ -98,7 +85,7 @@ export default function LoginPage() {
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="atharva@example.com"
+                  placeholder="name@example.com"
                   className="w-full pl-10 pr-4 py-2.5 bg-slate-950/70 border border-slate-800 rounded-xl text-slate-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500 transition-all placeholder:text-slate-600"
                 />
               </div>
@@ -109,12 +96,6 @@ export default function LoginPage() {
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300">
                   Password
                 </label>
-                <Link
-                  href="/forgot-password"
-                  className="text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
-                >
-                  Forgot password?
-                </Link>
               </div>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
@@ -146,16 +127,6 @@ export default function LoginPage() {
               )}
             </button>
           </form>
-
-          <div className="mt-6 pt-6 border-t border-slate-800/80">
-            <button
-              type="button"
-              onClick={handleDemoAccess}
-              className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700/80 text-slate-200 font-medium rounded-xl border border-slate-700 text-xs transition-colors flex items-center justify-center space-x-2"
-            >
-              <span>Instant Dashboard Demo Access</span>
-            </button>
-          </div>
         </div>
       </div>
     </div>

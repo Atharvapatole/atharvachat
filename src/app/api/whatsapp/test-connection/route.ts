@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { testWhatsAppConnection } from "@/lib/whatsapp";
-import { encryptCredential } from "@/lib/crypto";
+import { encryptCredential, decryptCredential } from "@/lib/crypto";
+import { getEnvWhatsAppConfig } from "@/lib/config";
 
 export async function POST(req: NextRequest) {
   try {
@@ -15,8 +16,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await req.json();
-    const {
+    const body = await req.json().catch(() => ({}));
+    let {
       phoneNumberId,
       wabaId,
       appSecret,
@@ -24,6 +25,34 @@ export async function POST(req: NextRequest) {
       verifyToken,
       save = false,
     } = body;
+
+    // Fallback to DB or Environment variables if not provided in body
+    if (!phoneNumberId || !accessToken) {
+      const { data: waAccount } = await supabase
+        .from("whatsapp_accounts")
+        .select("*")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (waAccount) {
+        phoneNumberId = waAccount.phone_number_id;
+        try {
+          accessToken = decryptCredential({
+            ciphertext: waAccount.encrypted_access_token,
+            iv: waAccount.access_token_iv,
+            tag: waAccount.access_token_tag,
+          });
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!phoneNumberId || !accessToken) {
+        const envConfig = getEnvWhatsAppConfig();
+        phoneNumberId = envConfig.phoneNumberId;
+        accessToken = envConfig.accessToken;
+      }
+    }
 
     if (!phoneNumberId || !accessToken) {
       return NextResponse.json(

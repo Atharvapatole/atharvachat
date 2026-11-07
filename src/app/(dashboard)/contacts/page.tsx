@@ -84,73 +84,19 @@ export default function ContactsPage() {
           .eq("user_id", user.id)
           .order("created_at", { ascending: false });
 
-        if (data && data.length > 0) {
+        if (!error && data) {
           setContacts(data as Contact[]);
         } else {
-          loadSampleContacts();
+          setContacts([]);
         }
       } else {
-        loadSampleContacts();
+        setContacts([]);
       }
     } catch {
-      loadSampleContacts();
+      setContacts([]);
     } finally {
       setLoading(false);
     }
-  };
-
-  const loadSampleContacts = () => {
-    const samples: Contact[] = [
-      {
-        id: "c-1",
-        name: "Rajesh Sharma",
-        phone_number: "919820112233",
-        email: "rajesh@techcorp.in",
-        company: "TechCorp Mumbai",
-        tags: ["Enterprise", "VIP", "Mumbai"],
-        notes: "Interested in WhatsApp AI bot integration for enterprise customer support.",
-        consent_status: "opted_in",
-        ai_enabled: true,
-        created_at: new Date(Date.now() - 86400000 * 5).toISOString(),
-      },
-      {
-        id: "c-2",
-        name: "Ananya Patel",
-        phone_number: "919876543210",
-        email: "ananya@designstudio.com",
-        company: "Studio Bloom",
-        tags: ["Design", "Prospect"],
-        notes: "Requested system prompt customization details.",
-        consent_status: "opted_in",
-        ai_enabled: true,
-        created_at: new Date(Date.now() - 86400000 * 3).toISOString(),
-      },
-      {
-        id: "c-3",
-        name: "Vikram Malhotra",
-        phone_number: "919988776655",
-        email: "vikram@fintech.co",
-        company: "FinEdge Solutions",
-        tags: ["Fintech", "Follow-up"],
-        notes: "Opted out from marketing broadcasts.",
-        consent_status: "opted_out",
-        ai_enabled: false,
-        created_at: new Date(Date.now() - 86400000 * 7).toISOString(),
-      },
-      {
-        id: "c-4",
-        name: "Pooja Deshmukh",
-        phone_number: "919123456789",
-        email: "pooja@puneventures.in",
-        company: "Pune Ventures",
-        tags: ["Investor", "VIP"],
-        notes: "Responds in Marathi and English.",
-        consent_status: "opted_in",
-        ai_enabled: true,
-        created_at: new Date(Date.now() - 86400000 * 2).toISOString(),
-      },
-    ];
-    setContacts(samples);
   };
 
   useEffect(() => {
@@ -451,83 +397,93 @@ export default function ContactsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60">
-              {filteredContacts.map((contact) => (
-                <tr key={contact.id} className="hover:bg-slate-900/80 transition-colors">
-                  <td className="py-3.5 px-4">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-emerald-600/30 to-teal-500/30 text-emerald-300 font-bold flex items-center justify-center border border-emerald-500/20">
-                        {contact.name ? contact.name.charAt(0) : "C"}
-                      </div>
-                      <div>
-                        <p className="font-bold text-white text-sm">{contact.name || "Customer"}</p>
-                        <p className="text-[11px] text-slate-400">{contact.email || "No email"}</p>
-                      </div>
-                    </div>
-                  </td>
-
-                  <td className="py-3.5 px-4 font-mono font-medium text-emerald-400">
-                    {formatPhoneNumber(contact.phone_number)}
-                  </td>
-
-                  <td className="py-3.5 px-4 text-slate-300">
-                    {contact.company || "—"}
-                  </td>
-
-                  <td className="py-3.5 px-4">
-                    <div className="flex flex-wrap gap-1">
-                      {contact.tags.map((t, idx) => (
-                        <span
-                          key={idx}
-                          className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px] font-medium border border-slate-700"
-                        >
-                          {t}
-                        </span>
-                      ))}
-                    </div>
-                  </td>
-
-                  <td className="py-3.5 px-4">
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${
-                        contact.consent_status === "opted_in"
-                          ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
-                          : "bg-rose-500/15 text-rose-400 border border-rose-500/20"
-                      }`}
-                    >
-                      {contact.consent_status === "opted_in" ? "Opted In" : "Opted Out"}
-                    </span>
-                  </td>
-
-                  <td className="py-3.5 px-4 text-right">
-                    <div className="flex items-center justify-end space-x-2">
-                      <button
-                        onClick={() => {
-                          setEditingContact(contact);
-                          setFormData({
-                            name: contact.name || "",
-                            phone_number: contact.phone_number,
-                            email: contact.email || "",
-                            company: contact.company || "",
-                            tags: contact.tags.join(", "),
-                            notes: contact.notes || "",
-                            consent_status: contact.consent_status,
-                          });
-                          setShowAddModal(true);
-                        }}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteContact(contact.id)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+              {filteredContacts.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-12 text-center text-slate-500">
+                    <Users className="w-8 h-8 text-slate-700 mx-auto mb-2" />
+                    <p className="font-bold text-slate-300 text-sm">No contacts yet. Start a new chat to add a contact.</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Contacts are automatically saved when you initiate or receive WhatsApp chats.</p>
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filteredContacts.map((contact) => (
+                  <tr key={contact.id} className="hover:bg-slate-900/80 transition-colors">
+                    <td className="py-3.5 px-4">
+                      <div className="flex items-center space-x-3">
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-emerald-600/30 to-teal-500/30 text-emerald-300 font-bold flex items-center justify-center border border-emerald-500/20">
+                          {contact.name ? contact.name.charAt(0) : "C"}
+                        </div>
+                        <div>
+                          <p className="font-bold text-white text-sm">{contact.name || "Customer"}</p>
+                          <p className="text-[11px] text-slate-400">{contact.email || "No email"}</p>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td className="py-3.5 px-4 font-mono font-medium text-emerald-400">
+                      {formatPhoneNumber(contact.phone_number)}
+                    </td>
+
+                    <td className="py-3.5 px-4 text-slate-300">
+                      {contact.company || "—"}
+                    </td>
+
+                    <td className="py-3.5 px-4">
+                      <div className="flex flex-wrap gap-1">
+                        {contact.tags.map((t, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px] font-medium border border-slate-700"
+                          >
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+
+                    <td className="py-3.5 px-4">
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${
+                          contact.consent_status === "opted_in"
+                            ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
+                            : "bg-rose-500/15 text-rose-400 border border-rose-500/20"
+                        }`}
+                      >
+                        {contact.consent_status === "opted_in" ? "Opted In" : "Opted Out"}
+                      </span>
+                    </td>
+
+                    <td className="py-3.5 px-4 text-right">
+                      <div className="flex items-center justify-end space-x-2">
+                        <button
+                          onClick={() => {
+                            setEditingContact(contact);
+                            setFormData({
+                              name: contact.name || "",
+                              phone_number: contact.phone_number,
+                              email: contact.email || "",
+                              company: contact.company || "",
+                              tags: contact.tags.join(", "),
+                              notes: contact.notes || "",
+                              consent_status: contact.consent_status,
+                            });
+                            setShowAddModal(true);
+                          }}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteContact(contact.id)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

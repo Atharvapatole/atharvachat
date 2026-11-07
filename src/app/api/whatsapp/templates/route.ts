@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { decryptCredential } from "@/lib/crypto";
 import { fetchWhatsAppTemplates } from "@/lib/whatsapp";
+import { getEnvWhatsAppConfig } from "@/lib/config";
 
 export async function GET(req: NextRequest) {
   try {
@@ -18,21 +19,19 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const sync = searchParams.get("sync") === "true";
 
-    // 1. Fetch connected account
+    // 1. Fetch connected account or env configuration
     const { data: waAccount } = await supabase
       .from("whatsapp_accounts")
       .select("*")
       .eq("user_id", user.id)
       .eq("status", "connected")
-      .single();
+      .maybeSingle();
 
-    if (!waAccount) {
-      return NextResponse.json({ templates: [] });
-    }
+    const envConfig = getEnvWhatsAppConfig();
+    let wabaId = waAccount?.waba_id || envConfig.wabaId;
+    let accessToken = "";
 
-    // If sync requested, query Meta Graph API and sync into DB
-    if (sync) {
-      let accessToken = "";
+    if (waAccount) {
       try {
         accessToken = decryptCredential({
           ciphertext: waAccount.encrypted_access_token,
@@ -40,10 +39,17 @@ export async function GET(req: NextRequest) {
           tag: waAccount.access_token_tag,
         });
       } catch {
-        return NextResponse.json({ error: "Failed to decrypt credentials" }, { status: 500 });
+        console.error("Failed to decrypt credentials");
       }
+    }
 
-      const metaRes = await fetchWhatsAppTemplates(waAccount.waba_id, accessToken);
+    if (!accessToken && envConfig.accessToken) {
+      accessToken = envConfig.accessToken;
+    }
+
+    // If sync requested, query Meta Graph API and sync into DB
+    if (sync && wabaId && accessToken) {
+      const metaRes = await fetchWhatsAppTemplates(wabaId, accessToken);
       if (metaRes.success && metaRes.templates) {
         for (const tpl of metaRes.templates) {
           const bodyComp = (tpl.components as any[])?.find((c) => c.type === "BODY");
@@ -57,7 +63,7 @@ export async function GET(req: NextRequest) {
           await supabase.from("message_templates").upsert(
             {
               user_id: user.id,
-              whatsapp_account_id: waAccount.id,
+              whatsapp_account_id: waAccount?.id || null,
               name: tpl.name,
               language: tpl.language || "en_US",
               category: tpl.category || "MARKETING",

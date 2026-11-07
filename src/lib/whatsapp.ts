@@ -1,6 +1,5 @@
 import { cleanPhoneNumber } from "./utils";
-
-const GRAPH_API_BASE = "https://graph.facebook.com/v21.0";
+import { META_GRAPH_BASE_URL } from "./config";
 
 export interface WhatsAppApiError {
   message: string;
@@ -26,6 +25,34 @@ export interface WhatsAppProfileResponse {
 }
 
 /**
+ * Helper to execute fetch with transient error retries (for HTTP 429, 500, 503)
+ */
+async function fetchWithRetry(url: string, options: RequestInit, retries = 2): Promise<Response> {
+  let attempt = 0;
+  while (attempt <= retries) {
+    try {
+      const response = await fetch(url, options);
+      if (response.status === 429 || response.status === 500 || response.status === 503) {
+        if (attempt < retries) {
+          attempt++;
+          await new Promise((res) => setTimeout(res, 500 * Math.pow(2, attempt)));
+          continue;
+        }
+      }
+      return response;
+    } catch (err) {
+      if (attempt < retries) {
+        attempt++;
+        await new Promise((res) => setTimeout(res, 500 * Math.pow(2, attempt)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  return fetch(url, options);
+}
+
+/**
  * Test connectivity and fetch business phone metadata from Meta Graph API
  */
 export async function testWhatsAppConnection(
@@ -33,8 +60,8 @@ export async function testWhatsAppConnection(
   accessToken: string
 ): Promise<{ success: boolean; data?: WhatsAppProfileResponse; error?: string }> {
   try {
-    const url = `${GRAPH_API_BASE}/${encodeURIComponent(phoneNumberId)}?fields=id,verified_name,display_phone_number,quality_rating,code_verification_status`;
-    const res = await fetch(url, {
+    const url = `${META_GRAPH_BASE_URL}/${encodeURIComponent(phoneNumberId)}?fields=id,verified_name,display_phone_number,quality_rating,code_verification_status`;
+    const res = await fetchWithRetry(url, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -75,7 +102,7 @@ export async function sendWhatsAppTextMessage(params: {
   const recipient = cleanPhoneNumber(to);
 
   try {
-    const url = `${GRAPH_API_BASE}/${encodeURIComponent(phoneNumberId)}/messages`;
+    const url = `${META_GRAPH_BASE_URL}/${encodeURIComponent(phoneNumberId)}/messages`;
     const body = {
       messaging_product: "whatsapp",
       recipient_type: "individual",
@@ -87,7 +114,7 @@ export async function sendWhatsAppTextMessage(params: {
       },
     };
 
-    const res = await fetch(url, {
+    const res = await fetchWithRetry(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -152,7 +179,7 @@ export async function sendWhatsAppTemplateMessage(params: {
   const recipient = cleanPhoneNumber(to);
 
   try {
-    const url = `${GRAPH_API_BASE}/${encodeURIComponent(phoneNumberId)}/messages`;
+    const url = `${META_GRAPH_BASE_URL}/${encodeURIComponent(phoneNumberId)}/messages`;
     const body = {
       messaging_product: "whatsapp",
       recipient_type: "individual",
@@ -167,7 +194,7 @@ export async function sendWhatsAppTemplateMessage(params: {
       },
     };
 
-    const res = await fetch(url, {
+    const res = await fetchWithRetry(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -208,8 +235,8 @@ export async function fetchWhatsAppTemplates(
   accessToken: string
 ): Promise<{ success: boolean; templates?: Array<Record<string, unknown>>; error?: string }> {
   try {
-    const url = `${GRAPH_API_BASE}/${encodeURIComponent(wabaId)}/message_templates?limit=100`;
-    const res = await fetch(url, {
+    const url = `${META_GRAPH_BASE_URL}/${encodeURIComponent(wabaId)}/message_templates?limit=100`;
+    const res = await fetchWithRetry(url, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -246,7 +273,7 @@ export async function markWhatsAppMessageRead(
   messageId: string
 ): Promise<boolean> {
   try {
-    const url = `${GRAPH_API_BASE}/${encodeURIComponent(phoneNumberId)}/messages`;
+    const url = `${META_GRAPH_BASE_URL}/${encodeURIComponent(phoneNumberId)}/messages`;
     await fetch(url, {
       method: "POST",
       headers: {

@@ -470,3 +470,26 @@ BEGIN
     CREATE TRIGGER update_ai_settings_updated_at BEFORE UPDATE ON public.ai_settings FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
+
+-- ------------------------------------------------------------------------------
+-- 12. REALTIME REPLICATION CONFIGURATION
+-- ------------------------------------------------------------------------------
+-- Ensure Supabase Realtime streams messages, conversations, and contacts
+DO $$
+BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.conversations;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.contacts;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+

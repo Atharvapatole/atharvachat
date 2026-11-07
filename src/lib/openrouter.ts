@@ -1,4 +1,5 @@
 import { OpenRouterModel } from "./types";
+import { getAppUrl } from "./config";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
@@ -37,7 +38,7 @@ export async function discoverFreeModels(apiKey?: string | null): Promise<{
   try {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "https://atharva-chat.local",
+      "HTTP-Referer": getAppUrl(),
       "X-Title": "Atharva Chat WhatsApp Business Platform",
     };
 
@@ -217,7 +218,7 @@ export async function executeChatCompletion(
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "https://atharva-chat.local",
+          "HTTP-Referer": getAppUrl(),
           "X-Title": "Atharva Chat AI Assistant",
         },
         body: JSON.stringify({

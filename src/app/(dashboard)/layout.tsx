@@ -50,9 +50,9 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [waConnected, setWaConnected] = useState<boolean>(true);
+  const [waConnected, setWaConnected] = useState<boolean>(false);
   const [aiActive, setAiActive] = useState<boolean>(true);
-  const [userEmail, setUserEmail] = useState<string>("atharva@example.com");
+  const [userEmail, setUserEmail] = useState<string>("");
 
   useEffect(() => {
     // Check auth and connection status
@@ -61,15 +61,24 @@ export default function DashboardLayout({
         const supabase = createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (user) {
-          setUserEmail(user.email || "atharva@example.com");
+          setUserEmail(user.email || "");
           const { data: account } = await supabase
             .from("whatsapp_accounts")
             .select("status")
             .eq("user_id", user.id)
             .maybeSingle();
 
-          if (account) {
-            setWaConnected(account.status === "connected");
+          if (account && account.status === "connected") {
+            setWaConnected(true);
+          } else {
+            // Check if connection works via API (env credentials fallback or DB)
+            try {
+              const res = await fetch("/api/whatsapp/test-connection");
+              const test = await res.json();
+              setWaConnected(Boolean(test.success));
+            } catch {
+              setWaConnected(false);
+            }
           }
 
           const { data: aiSettings } = await supabase
@@ -83,7 +92,7 @@ export default function DashboardLayout({
           }
         }
       } catch {
-        // Fallback for offline demo
+        setWaConnected(false);
       }
     };
     checkState();
@@ -94,7 +103,6 @@ export default function DashboardLayout({
       const supabase = createClient();
       await supabase.auth.signOut();
     } catch {}
-    localStorage.removeItem("atharva_demo_user");
     router.push("/login");
   };
 
