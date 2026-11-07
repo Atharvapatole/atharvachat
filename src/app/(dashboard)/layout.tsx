@@ -73,9 +73,14 @@ export default function DashboardLayout({
           } else {
             // Check if connection works via API (env credentials fallback or DB)
             try {
-              const res = await fetch("/api/whatsapp/test-connection");
+              const { data: { session } } = await supabase.auth.getSession();
+              const headers: Record<string, string> = {};
+              if (session?.access_token) {
+                headers["Authorization"] = `Bearer ${session.access_token}`;
+              }
+              const res = await fetch("/api/whatsapp/test-connection", { headers });
               const test = await res.json();
-              setWaConnected(Boolean(test.success));
+              setWaConnected(Boolean(test.success && test.configured && test.status === "connected"));
             } catch {
               setWaConnected(false);
             }

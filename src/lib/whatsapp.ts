@@ -52,39 +52,251 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 2): P
   return fetch(url, options);
 }
 
+export interface VerifyWhatsAppResult {
+  success: boolean;
+  statusCode: number;
+  data?: WhatsAppProfileResponse;
+  error?: string;
+  code?: string;
+}
+
 /**
- * Test connectivity and fetch business phone metadata from Meta Graph API
+ * Parses and maps Meta Graph API error payloads into actionable, safe user messages.
+ * Never exposes raw access tokens, App Secrets, or cryptographic secrets.
  */
-export async function testWhatsAppConnection(
-  phoneNumberId: string,
-  accessToken: string
-): Promise<{ success: boolean; data?: WhatsAppProfileResponse; error?: string }> {
+export function formatMetaApiError(
+  status: number,
+  data: any,
+  context: "phone_number" | "waba" | "message" = "phone_number"
+): { message: string; code: string } {
+  const metaError = data?.error;
+  const errorCode = metaError?.code;
+  const rawMsg = String(metaError?.message || "");
+
+  // 1. Invalid or expired OAuth Access Token
+  if (
+    status === 401 ||
+    errorCode === 190 ||
+    rawMsg.toLowerCase().includes("invalid oauth access token") ||
+    rawMsg.toLowerCase().includes("session has expired")
+  ) {
+    return {
+      message: "Invalid or expired Meta access token. Please verify or regenerate your System User token in Meta Business Manager.",
+      code: "META_INVALID_TOKEN",
+    };
+  }
+
+  // 2. Missing WhatsApp Permissions
+  if (
+    errorCode === 200 ||
+    errorCode === 10 ||
+    rawMsg.toLowerCase().includes("permission") ||
+    rawMsg.toLowerCase().includes("whatsapp_business_messaging") ||
+    rawMsg.toLowerCase().includes("whatsapp_business_management")
+  ) {
+    return {
+      message: "Missing WhatsApp permissions. Ensure the Meta System User has 'whatsapp_business_messaging' and 'whatsapp_business_management' permissions assigned.",
+      code: "META_MISSING_PERMISSIONS",
+    };
+  }
+
+  // 3. WABA Access Denied
+  if (context === "waba" && (status === 403 || errorCode === 200 || errorCode === 10)) {
+    return {
+      message: "WhatsApp Business Account access denied. Verify that the System User has been assigned as an asset to your WhatsApp Business Account in Meta Business Manager.",
+      code: "META_WABA_ACCESS_DENIED",
+    };
+  }
+
+  // 4. Object Not Found (Invalid Phone Number ID or WABA ID)
+  if (
+    errorCode === 100 ||
+    status === 404 ||
+    rawMsg.toLowerCase().includes("does not exist") ||
+    rawMsg.toLowerCase().includes("unsupported get request")
+  ) {
+    if (context === "phone_number") {
+      return {
+        message: "Phone Number ID not found on Meta. Verify your WhatsApp Phone Number ID in Meta App Dashboard > WhatsApp > API Setup.",
+        code: "META_PHONE_ID_NOT_FOUND",
+      };
+    }
+    return {
+      message: "WhatsApp Business Account (WABA ID) not found on Meta. Verify your WABA ID in Meta Business Manager.",
+      code: "META_WABA_NOT_FOUND",
+    };
+  }
+
+  // 5. Rate limits and transient errors
+  if (status === 429) {
+    return {
+      message: "Meta Graph API rate limit reached. Please wait a few moments before trying again.",
+      code: "META_RATE_LIMIT",
+    };
+  }
+
+  if (status === 500 || status === 503) {
+    return {
+      message: `Meta API temporarily unavailable (HTTP ${status}). Please retry in a few moments.`,
+      code: "META_UNAVAILABLE",
+    };
+  }
+
+  // Fallback to safe message without exposing sensitive details
+  const sanitized = rawMsg
+    ? rawMsg.replace(/EA[A-Za-z0-9_-]{20,}/g, "[TOKEN_REDACTED]")
+    : `HTTP ${status}: Failed to communicate with Meta Cloud API`;
+
+  return {
+    message: sanitized,
+    code: "META_API_ERROR",
+  };
+}
+
+/**
+ * Validates Meta WhatsApp Cloud API credentials against both:
+ * 1. GET /{PHONE_NUMBER_ID}?fields=id,verified_name,display_phone_number,quality_rating
+ * 2. GET /{WABA_ID}/phone_numbers (confirms Phone Number ID belongs to specified WABA)
+ * Checks Meta token permissions and returns actionable error messages.
+ */
+export async function verifyWhatsAppCredentials(params: {
+  phoneNumberId: string;
+  accessToken: string;
+  wabaId?: string;
+}): Promise<VerifyWhatsAppResult> {
+  const { phoneNumberId, accessToken, wabaId } = params;
+
+  if (!phoneNumberId || !phoneNumberId.trim()) {
+    return {
+      success: false,
+      statusCode: 400,
+      error: "Phone Number ID is required.",
+      code: "MISSING_PHONE_NUMBER_ID",
+    };
+  }
+
+  if (!accessToken || !accessToken.trim()) {
+    return {
+      success: false,
+      statusCode: 400,
+      error: "System User Access Token is required.",
+      code: "MISSING_ACCESS_TOKEN",
+    };
+  }
+
+  const cleanPhoneId = phoneNumberId.trim();
+  const cleanToken = accessToken.trim();
+  const cleanWabaId = wabaId?.trim();
+
+  // Step 1: Validate Phone Number ID against Meta Graph API
   try {
-    const url = `${META_GRAPH_BASE_URL}/${encodeURIComponent(phoneNumberId)}?fields=id,verified_name,display_phone_number,quality_rating,code_verification_status`;
-    const res = await fetchWithRetry(url, {
+    const phoneUrl = `${META_GRAPH_BASE_URL}/${encodeURIComponent(cleanPhoneId)}?fields=id,verified_name,display_phone_number,quality_rating,code_verification_status`;
+    const phoneRes = await fetchWithRetry(phoneUrl, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: `Bearer ${cleanToken}`,
         "Content-Type": "application/json",
       },
     });
 
-    const data = await res.json();
-    if (!res.ok || data.error) {
+    const phoneData = await phoneRes.json().catch(() => ({}));
+
+    if (!phoneRes.ok || phoneData.error) {
+      const formatted = formatMetaApiError(phoneRes.status, phoneData, "phone_number");
       return {
         success: false,
-        error: data.error?.message || `HTTP ${res.status}: Failed to connect to WhatsApp Cloud API`,
+        statusCode: phoneRes.status,
+        error: formatted.message,
+        code: formatted.code,
       };
+    }
+
+    // Validate that returned ID matches the configured ID
+    if (phoneData.id !== cleanPhoneId) {
+      return {
+        success: false,
+        statusCode: 400,
+        error: `Phone Number ID returned by Meta (${phoneData.id}) does not match the configured Phone Number ID (${cleanPhoneId}).`,
+        code: "PHONE_ID_MISMATCH",
+      };
+    }
+
+    const profile: WhatsAppProfileResponse = {
+      id: phoneData.id,
+      verified_name: phoneData.verified_name,
+      display_phone_number: phoneData.display_phone_number,
+      quality_rating: phoneData.quality_rating,
+      code_verification_status: phoneData.code_verification_status,
+    };
+
+    // Step 2: If WABA ID is provided, verify WABA access and confirm Phone Number ID belongs to the WABA
+    if (cleanWabaId) {
+      const wabaUrl = `${META_GRAPH_BASE_URL}/${encodeURIComponent(cleanWabaId)}/phone_numbers?fields=id,display_phone_number,verified_name,quality_rating`;
+      const wabaRes = await fetchWithRetry(wabaUrl, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${cleanToken}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      const wabaData = await wabaRes.json().catch(() => ({}));
+
+      if (!wabaRes.ok || wabaData.error) {
+        const formatted = formatMetaApiError(wabaRes.status, wabaData, "waba");
+        return {
+          success: false,
+          statusCode: wabaRes.status,
+          error: formatted.message,
+          code: formatted.code,
+        };
+      }
+
+      const wabaPhones: Array<{ id: string }> = wabaData.data || [];
+      const belongsToWaba = wabaPhones.some((p) => p.id === cleanPhoneId);
+
+      if (!belongsToWaba) {
+        return {
+          success: false,
+          statusCode: 400,
+          error: `Phone Number ID does not match the WABA. The configured Phone Number ID (${cleanPhoneId}) does not belong to WhatsApp Business Account (${cleanWabaId}).`,
+          code: "PHONE_WABA_MISMATCH",
+        };
+      }
     }
 
     return {
       success: true,
-      data: data as WhatsAppProfileResponse,
+      statusCode: 200,
+      data: profile,
     };
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : "Network error contacting Meta Graph API";
-    return { success: false, error: errorMsg };
+    return {
+      success: false,
+      statusCode: 502,
+      error: `Meta API temporarily unavailable: ${errorMsg}`,
+      code: "META_NETWORK_ERROR",
+    };
   }
+}
+
+/**
+ * Test connectivity and fetch business phone metadata from Meta Graph API (alias)
+ */
+export async function testWhatsAppConnection(
+  phoneNumberId: string,
+  accessToken: string,
+  wabaId?: string
+): Promise<{ success: boolean; data?: WhatsAppProfileResponse; error?: string; statusCode?: number; code?: string }> {
+  const result = await verifyWhatsAppCredentials({ phoneNumberId, accessToken, wabaId });
+  return {
+    success: result.success,
+    data: result.data,
+    error: result.error,
+    statusCode: result.statusCode,
+    code: result.code,
+  };
 }
 
 /**

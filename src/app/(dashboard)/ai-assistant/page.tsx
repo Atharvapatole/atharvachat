@@ -18,6 +18,7 @@ import {
   Key,
 } from "lucide-react";
 import { OpenRouterModel } from "@/lib/types";
+import { createClient } from "@/lib/supabase/client";
 
 const DEFAULT_SYSTEM_PROMPT = `You are Atharva's personal AI assistant communicating through his WhatsApp Business account.
 
@@ -60,12 +61,32 @@ export default function AiAssistantPage() {
   const [testInput, setTestInput] = useState("");
   const [testingAi, setTestingAi] = useState(false);
 
+  const getAuthHeaders = async (): Promise<Record<string, string>> => {
+    try {
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (session?.access_token) {
+        headers["Authorization"] = `Bearer ${session.access_token}`;
+      }
+      return headers;
+    } catch {
+      return { "Content-Type": "application/json" };
+    }
+  };
+
   // Load Settings and Models on mount
   useEffect(() => {
     // 1. Fetch AI Settings
-    fetch("/api/ai/settings")
-      .then((res) => res.json())
-      .then((data) => {
+    const loadSettings = async () => {
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch("/api/ai/settings", { headers });
+        const data = await res.json();
         if (data.settings) {
           setIsEnabled(data.settings.is_enabled ?? true);
           setAssistantName(data.settings.assistant_name || "Atharva AI");
@@ -78,9 +99,10 @@ export default function AiAssistantPage() {
           if (data.settings.pause_duration_minutes) setPauseDuration(data.settings.pause_duration_minutes);
           if (data.settings.custom_api_key) setCustomApiKey(data.settings.custom_api_key);
         }
-      })
-      .catch(() => {});
+      } catch {}
+    };
 
+    loadSettings();
     // 2. Discover Free Models
     fetchModels();
   }, []);
@@ -88,7 +110,8 @@ export default function AiAssistantPage() {
   const fetchModels = async () => {
     setLoadingModels(true);
     try {
-      const res = await fetch("/api/ai/models");
+      const headers = await getAuthHeaders();
+      const res = await fetch("/api/ai/models", { headers });
       const data = await res.json();
       if (data.models && data.models.length > 0) {
         setModels(data.models);
@@ -104,9 +127,10 @@ export default function AiAssistantPage() {
     setSavingSettings(true);
     setToastMsg(null);
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/ai/settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           is_enabled: isEnabled,
           assistant_name: assistantName,
@@ -146,9 +170,10 @@ export default function AiAssistantPage() {
     setTestingAi(true);
 
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/ai/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           messages: newHistory,
           systemPrompt,

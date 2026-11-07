@@ -9,18 +9,15 @@ import {
   Check,
   RefreshCw,
   AlertCircle,
-  ExternalLink,
-  Power,
   PowerOff,
   PhoneCall,
   CheckCircle2,
-  HelpCircle,
   Loader2,
   Lock,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { generateVerifyToken, maskSecret } from "@/lib/utils";
-import { getWebhookUrl, PRODUCTION_APP_URL } from "@/lib/config";
+import { generateVerifyToken } from "@/lib/utils";
+import { getWebhookUrl } from "@/lib/config";
 
 export default function WhatsAppConnectionPage() {
   const [phoneNumberId, setPhoneNumberId] = useState("");
@@ -28,6 +25,9 @@ export default function WhatsAppConnectionPage() {
   const [appSecret, setAppSecret] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [verifyToken, setVerifyToken] = useState("");
+
+  const [hasSavedToken, setHasSavedToken] = useState(false);
+  const [hasSavedSecret, setHasSavedSecret] = useState(false);
 
   const [connectionStatus, setConnectionStatus] = useState<"connected" | "disconnected" | "error">("disconnected");
   const [displayPhone, setDisplayPhone] = useState<string | null>(null);
@@ -43,30 +43,49 @@ export default function WhatsAppConnectionPage() {
 
   const webhookUrl = getWebhookUrl();
 
-  useEffect(() => {
+  // Helper to get authenticated headers for API routes
+  const getAuthHeaders = async (): Promise<Record<string, string>> => {
+    const supabase = createClient();
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
 
-    // Load existing account configuration
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    if (session?.access_token) {
+      headers["Authorization"] = `Bearer ${session.access_token}`;
+    }
+
+    return headers;
+  };
+
+  useEffect(() => {
+    // Load existing account configuration via authenticated API
     const loadAccount = async () => {
       try {
-        const supabase = createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          const { data, error } = await supabase
-            .from("whatsapp_accounts")
-            .select("*")
-            .eq("user_id", user.id)
-            .maybeSingle();
+        const headers = await getAuthHeaders();
+        const res = await fetch("/api/whatsapp/test-connection", {
+          method: "GET",
+          headers,
+        });
 
-          if (data) {
-            setPhoneNumberId(data.phone_number_id || "");
-            setWabaId(data.waba_id || "");
-            setVerifyToken(data.verify_token || generateVerifyToken());
-            setConnectionStatus(data.status || "disconnected");
-            setDisplayPhone(data.display_phone_number);
-            setVerifiedName(data.verified_name);
-            setQualityRating(data.quality_rating);
-          } else {
-            setVerifyToken(generateVerifyToken());
+        const data = await res.json();
+
+        if (res.ok && data.success && data.configured) {
+          setPhoneNumberId(data.phoneNumberId || "");
+          setWabaId(data.wabaId || "");
+          setVerifyToken(data.verifyToken || generateVerifyToken());
+          setConnectionStatus(data.status || "disconnected");
+          setDisplayPhone(data.displayPhone || null);
+          setVerifiedName(data.verifiedName || null);
+          setQualityRating(data.qualityRating || null);
+          setHasSavedToken(Boolean(data.hasAccessToken));
+          setHasSavedSecret(Boolean(data.hasAppSecret));
+
+          if (data.errorMessage) {
+            setErrorMsg(data.errorMessage);
           }
         } else {
           setVerifyToken(generateVerifyToken());
@@ -99,7 +118,10 @@ export default function WhatsAppConnectionPage() {
 
   // Test Connection
   const handleTestConnection = async () => {
-    if (!phoneNumberId.trim() || !accessToken.trim()) {
+    const phoneToTest = phoneNumberId.trim();
+    const tokenToTest = accessToken.trim();
+
+    if (!phoneToTest && !hasSavedToken) {
       setErrorMsg("Please enter Phone Number ID and Permanent Access Token to test.");
       return;
     }
@@ -109,12 +131,14 @@ export default function WhatsAppConnectionPage() {
     setSuccessMsg(null);
 
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/whatsapp/test-connection", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
-          phoneNumberId,
-          accessToken,
+          phoneNumberId: phoneToTest || undefined,
+          accessToken: tokenToTest || undefined,
+          wabaId: wabaId.trim() || undefined,
           save: false,
         }),
       });
@@ -139,10 +163,26 @@ export default function WhatsAppConnectionPage() {
     }
   };
 
-  // Save Credentials (AES-256-GCM Encrypted)
-  const handleSaveCredentials = async () => {
-    if (!phoneNumberId.trim() || !wabaId.trim() || !appSecret.trim() || !accessToken.trim()) {
-      setErrorMsg("All 5 WhatsApp credentials must be provided to save securely.");
+  // Connect WhatsApp & Save Credentials (AES-256-GCM Encrypted)
+  const handleConnectWhatsApp = async () => {
+    const cleanPhone = phoneNumberId.trim();
+    const cleanWaba = wabaId.trim();
+    const cleanSecret = appSecret.trim();
+    const cleanToken = accessToken.trim();
+    const cleanVerify = verifyToken.trim();
+
+    if (!cleanPhone || !cleanWaba) {
+      setErrorMsg("WhatsApp Phone Number ID and WABA ID are required.");
+      return;
+    }
+
+    if (!cleanToken && !hasSavedToken) {
+      setErrorMsg("Permanent System User Access Token is required to connect.");
+      return;
+    }
+
+    if (!cleanSecret && !hasSavedSecret) {
+      setErrorMsg("Meta App Secret is required for HMAC webhook signature verification.");
       return;
     }
 
@@ -151,15 +191,16 @@ export default function WhatsAppConnectionPage() {
     setSuccessMsg(null);
 
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/whatsapp/test-connection", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
-          phoneNumberId,
-          wabaId,
-          appSecret,
-          accessToken,
-          verifyToken,
+          phoneNumberId: cleanPhone,
+          wabaId: cleanWaba,
+          appSecret: cleanSecret || undefined,
+          accessToken: cleanToken || undefined,
+          verifyToken: cleanVerify || undefined,
           save: true,
         }),
       });
@@ -167,16 +208,22 @@ export default function WhatsAppConnectionPage() {
       const data = await res.json();
 
       if (!res.ok || !data.success) {
+        setConnectionStatus("error");
         setErrorMsg(data.error || "Failed to verify and save WhatsApp credentials.");
       } else {
         setConnectionStatus("connected");
         setDisplayPhone(data.profile?.display_phone_number || null);
         setVerifiedName(data.profile?.verified_name || null);
         setQualityRating(data.profile?.quality_rating || "GREEN");
-        setSuccessMsg("Credentials encrypted with AES-256-GCM and saved successfully!");
+        setHasSavedToken(true);
+        setHasSavedSecret(true);
+        setAccessToken("");
+        setAppSecret("");
+        setSuccessMsg("WhatsApp connected successfully! Credentials verified and encrypted with AES-256-GCM.");
       }
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : "Error saving credentials.");
+      setConnectionStatus("error");
+      setErrorMsg(err instanceof Error ? err.message : "Error connecting WhatsApp.");
     } finally {
       setLoading(false);
     }
@@ -187,7 +234,9 @@ export default function WhatsAppConnectionPage() {
     if (!confirm("Are you sure you want to disconnect your WhatsApp Cloud API account?")) return;
     try {
       const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (user) {
         await supabase
           .from("whatsapp_accounts")
@@ -224,7 +273,10 @@ export default function WhatsAppConnectionPage() {
       {errorMsg && (
         <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-sm flex items-start space-x-3">
           <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
-          <span>{errorMsg}</span>
+          <div className="space-y-1">
+            <span className="font-semibold">Connection Error:</span>
+            <p className="text-xs leading-relaxed text-rose-300">{errorMsg}</p>
+          </div>
         </div>
       )}
       {successMsg && (
@@ -271,9 +323,19 @@ export default function WhatsAppConnectionPage() {
             </div>
             {displayPhone && (
               <p className="text-xs text-slate-400 mt-1 flex items-center space-x-2">
-                <span>Number: <strong className="text-white">{displayPhone}</strong></span>
-                {verifiedName && <span>• Name: <strong className="text-white">{verifiedName}</strong></span>}
-                {qualityRating && <span>• Quality: <span className="text-emerald-400 font-bold">{qualityRating}</span></span>}
+                <span>
+                  Number: <strong className="text-white">{displayPhone}</strong>
+                </span>
+                {verifiedName && (
+                  <span>
+                    • Name: <strong className="text-white">{verifiedName}</strong>
+                  </span>
+                )}
+                {qualityRating && (
+                  <span>
+                    • Quality: <span className="text-emerald-400 font-bold">{qualityRating}</span>
+                  </span>
+                )}
               </p>
             )}
           </div>
@@ -334,7 +396,11 @@ export default function WhatsAppConnectionPage() {
               type="password"
               value={appSecret}
               onChange={(e) => setAppSecret(e.target.value)}
-              placeholder="••••••••••••••••••••••••••••••••"
+              placeholder={
+                hasSavedSecret
+                  ? "•••••••••••••••• (Encrypted in DB - leave blank to keep)"
+                  : "Enter your 32-character Meta App Secret"
+              }
               className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
             />
           </div>
@@ -381,7 +447,11 @@ export default function WhatsAppConnectionPage() {
             rows={3}
             value={accessToken}
             onChange={(e) => setAccessToken(e.target.value)}
-            placeholder="EAAG... (Generated from Meta Business Manager > System Users)"
+            placeholder={
+              hasSavedToken
+                ? "•••••••••••••••• (Encrypted with AES-256-GCM in DB - leave blank to keep)"
+                : "EAAG... (Generated from Meta Business Manager > System Users with whatsapp_business_messaging and whatsapp_business_management permissions)"
+            }
             className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
           />
         </div>
@@ -400,12 +470,12 @@ export default function WhatsAppConnectionPage() {
 
           <button
             type="button"
-            onClick={handleSaveCredentials}
+            onClick={handleConnectWhatsApp}
             disabled={loading}
             className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 flex items-center space-x-2 transition-all disabled:opacity-50"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
-            <span>Encrypt & Save Credentials</span>
+            <span>Connect WhatsApp (Save & Encrypt)</span>
           </button>
         </div>
       </div>
@@ -462,7 +532,7 @@ export default function WhatsAppConnectionPage() {
         <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2 text-xs text-slate-400">
           <p className="font-bold text-slate-200">Webhook Web Subscription Fields:</p>
           <ul className="list-disc pl-5 space-y-1">
-            <li>Check <strong>messages</strong> (Required to receive incoming customer messages and statuses)</li>
+            <li>Check <strong>messages</strong> (Required to receive incoming customer messages and delivery statuses)</li>
             <li>Click <strong>Verify and Save</strong> in Meta developer portal</li>
           </ul>
         </div>

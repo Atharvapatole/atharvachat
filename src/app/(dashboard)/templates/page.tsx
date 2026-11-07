@@ -15,6 +15,7 @@ import {
   Languages,
 } from "lucide-react";
 import { MessageTemplate } from "@/lib/types";
+import { createClient } from "@/lib/supabase/client";
 
 export default function MessageTemplatesPage() {
   const [templates, setTemplates] = useState<any[]>([]);
@@ -27,7 +28,13 @@ export default function MessageTemplatesPage() {
     else setLoading(true);
 
     try {
-      const res = await fetch(`/api/whatsapp/templates?sync=${sync}`);
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = {};
+      if (session?.access_token) {
+        headers["Authorization"] = `Bearer ${session.access_token}`;
+      }
+      const res = await fetch(`/api/whatsapp/templates?sync=${sync}`, { headers });
       const data = await res.json();
       if (data.templates) {
         setTemplates(data.templates);

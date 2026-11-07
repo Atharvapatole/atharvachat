@@ -142,16 +142,34 @@ export default function WhatsAppMessagingPage() {
     }
   }, [selectedConversation, supabase]);
 
+  const getAuthHeaders = async (): Promise<Record<string, string>> => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (session?.access_token) {
+        headers["Authorization"] = `Bearer ${session.access_token}`;
+      }
+      return headers;
+    } catch {
+      return { "Content-Type": "application/json" };
+    }
+  };
+
   useEffect(() => {
     fetchConversations();
 
-    // Fetch message templates
-    fetch("/api/whatsapp/templates")
-      .then((res) => res.json())
-      .then((data) => {
+    // Fetch message templates with auth header
+    const loadTemplates = async () => {
+      try {
+        const headers = await getAuthHeaders();
+        const res = await fetch("/api/whatsapp/templates", { headers });
+        const data = await res.json();
         if (data.templates) setTemplates(data.templates);
-      })
-      .catch(() => {});
+      } catch {}
+    };
+    loadTemplates();
   }, [fetchConversations]);
 
   // 2. Fetch Messages for Selected Conversation (Strictly Real Data)
@@ -343,9 +361,10 @@ export default function WhatsAppMessagingPage() {
     setTimeout(scrollToBottom, 50);
 
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/whatsapp/send", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           conversationId: selectedConversation.id,
           contactId: selectedConversation.contact_id,
@@ -424,9 +443,10 @@ export default function WhatsAppMessagingPage() {
     setErrorToast(null);
 
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch("/api/conversations/start", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           phoneNumber: newChatPhone,
           name: newChatName,

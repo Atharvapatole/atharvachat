@@ -127,9 +127,15 @@ export default function CampaignsPage() {
   // Action on campaign: Start / Process / Pause / Cancel
   const handleCampaignAction = async (campaignId: string, action: "start" | "pause" | "cancel") => {
     try {
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (session?.access_token) {
+        headers["Authorization"] = `Bearer ${session.access_token}`;
+      }
       const res = await fetch("/api/campaigns/process", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ campaignId, action }),
       });
 
